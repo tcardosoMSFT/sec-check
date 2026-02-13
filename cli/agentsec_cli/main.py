@@ -210,11 +210,11 @@ def print_available_skills(folder_path: Optional[str] = None) -> None:
     # Import the dynamic skill discovery module from core
     from agentsec.skill_discovery import discover_all_skills, get_skill_summary
 
-    print("\n📋 Available scanning skills:")
-    print("  Built-in skills (registered @tool functions):")
-    print("    • list_files       — Discover files in target directory")
-    print("    • analyze_file     — Analyze a file for security vulnerabilities")
-    print("    • generate_report  — Generate a formatted vulnerability report")
+    print("\n📋 Available scanning tools:")
+    print("  Copilot CLI built-in tools:")
+    print("    • bash             — Run file discovery and scanner commands")
+    print("    • skill            — Invoke agentic security scanning skills")
+    print("    • view             — Read files for manual code inspection")
 
     # Dynamically discover Copilot CLI agentic skills
     # The Copilot CLI looks in ~/.copilot/skills/ (user) and
@@ -335,6 +335,79 @@ def _parse_result_counts(result_text: str) -> dict:
     return counts
 
 
+def _truncate_text(text: str, max_length: int = 120) -> str:
+    """
+    Truncate text to a maximum length for display.
+
+    Replaces newlines with visible markers so multi-line text is
+    readable on a single display line. Adds an ellipsis if truncated.
+
+    Args:
+        text: The text to truncate.
+        max_length: Maximum character length for the preview.
+
+    Returns:
+        A single-line, possibly truncated, preview of the text.
+    """
+    # Replace newlines with a visible marker so the preview is one line
+    preview = text.strip().replace("\n", " ↵ ")
+
+    # Collapse multiple whitespace runs into a single space
+    preview = " ".join(preview.split())
+
+    if len(preview) > max_length:
+        return preview[:max_length] + "..."
+    return preview
+
+
+def print_config_summary(config, folder_path) -> None:
+    """
+    Print a summary showing which system message and prompt are being
+    used, where they came from, and a short preview of each.
+
+    This gives the user full visibility into the effective configuration
+    before the scan starts so they can verify the right prompts are
+    being used.
+
+    Args:
+        config: An AgentSecConfig instance (with source tracking fields).
+        folder_path: The resolved folder path (used to format the prompt preview).
+
+    Example output:
+        ┌─────────────────────────────────────────────────┐
+        │ Configuration                                   │
+        ├─────────────────────────────────────────────────┤
+        │ System message                                  │
+        │   Source : built-in default                     │
+        │   Preview: You are AgentSec, an AI-powered ...  │
+        │ Initial prompt                                  │
+        │   Source : config file: ./agentsec.yaml         │
+        │   Preview: Scan the folder {folder_path} fo...  │
+        └─────────────────────────────────────────────────┘
+    """
+    # Format the prompt preview with the actual folder path so the user
+    # can see exactly what will be sent to the LLM
+    try:
+        formatted_prompt = config.format_prompt(str(folder_path))
+    except (KeyError, IndexError):
+        formatted_prompt = config.initial_prompt
+
+    # Build readable previews of each value
+    sm_preview = _truncate_text(config.system_message)
+    ip_preview = _truncate_text(formatted_prompt)
+
+    print()
+    print("┌─ Configuration ─────────────────────────────────────────────┐")
+    print(f"│  System message")
+    print(f"│    Source : {config.system_message_source}")
+    print(f"│    Preview: {sm_preview}")
+    print(f"│  Initial prompt")
+    print(f"│    Source : {config.initial_prompt_source}")
+    print(f"│    Preview: {ip_preview}")
+    print("└─────────────────────────────────────────────────────────────┘")
+    print()
+
+
 async def run_scan(
     folder: str,
     config_path: Optional[str] = None,
@@ -410,10 +483,15 @@ async def run_scan(
         print(f"Configuration error: {error}", file=sys.stderr)
         return 1
 
-    # Step 4: Create the agent with the loaded configuration
+    # Step 4: Display configuration provenance
+    # This tells the user exactly where the system message and prompt
+    # came from — built-in defaults, a config file, or CLI flags.
+    print_config_summary(config, folder_path)
+
+    # Step 5: Create the agent with the loaded configuration
     agent = SecurityScannerAgent(config=config)
 
-    # Step 5: Set up progress tracking for real-time feedback
+    # Step 6: Set up progress tracking for real-time feedback
     progress_callback = create_progress_display()
     progress_tracker = ProgressTracker(
         callback=progress_callback,
@@ -422,19 +500,19 @@ async def run_scan(
     set_global_tracker(progress_tracker)
 
     try:
-        # Step 6: Initialize (connect to Copilot)
+        # Step 7: Initialize (connect to Copilot)
         print("Starting AgentSec security scanner...")
         await agent.initialize()
 
-        # Step 6b: Show available scanning skills and external tools
+        # Step 7b: Show available scanning skills and external tools
         # Pass the folder path so project-level skills can also be found
         print_available_skills(folder_path=str(folder_path))
 
-        # Step 7: Run the scan with progress tracking
+        # Step 8: Run the scan with progress tracking
         progress_tracker.start_scan(str(folder_path))
         result = await agent.scan(str(folder_path))
 
-        # Step 7b: Update progress tracker with issue count from
+        # Step 8b: Update progress tracker with issue count from
         # the agent's response (but keep the file count from the tracker
         # since it accurately reflects what was actually scanned)
         if result["status"] == "success" and result.get("result"):
@@ -447,7 +525,7 @@ async def run_scan(
 
         progress_tracker.finish_scan()
 
-        # Step 8: Display results based on status
+        # Step 9: Display results based on status
         if result["status"] == "success":
             print(result["result"])
 
@@ -459,7 +537,17 @@ async def run_scan(
             return 0
 
         elif result["status"] == "timeout":
-            print(f"Timeout: {result['error']}", file=sys.stderr)
+            # Check if we got partial results despite the timeout
+            if result.get("result"):
+                print("⚠️  Scan timed out, but partial results are available:\n")
+                print(result["result"])
+
+                # Save partial results too — they may still be useful
+                report_path = save_report(result["result"], folder_path)
+                if report_path:
+                    print(f"📄 Partial report saved to: {report_path}")
+            else:
+                print(f"Timeout: {result['error']}", file=sys.stderr)
             return 2
 
         else:
@@ -482,7 +570,7 @@ async def run_scan(
         return 1
 
     finally:
-        # Step 9: Always clean up resources
+        # Step 10: Always clean up resources
         set_global_tracker(None)  # Clear the global tracker
         await agent.cleanup()
         

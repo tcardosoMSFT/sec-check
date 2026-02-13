@@ -25,14 +25,13 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Optional
 
 from copilot import CopilotClient, SessionConfig, MessageOptions
 from copilot.session import SessionEventType
 from dotenv import load_dotenv
 
-# Import skills so they are registered with the agent framework
-from agentsec.skills import list_files, analyze_file, generate_report  # noqa: F401
 from agentsec.config import AgentSecConfig
 from agentsec.progress import get_global_tracker
 
@@ -41,6 +40,26 @@ load_dotenv()
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+# ── Timeout & stall-detection constants ──────────────────────────────
+# These control how long the agent waits before deciding the LLM is
+# stuck or the scan is finished.
+
+# Maximum total wall-clock time for a scan (seconds).
+# 300 s is enough for ~5 000 files; callers can override via the
+# ``timeout`` parameter on scan().
+DEFAULT_SCAN_TIMEOUT_SECONDS = 300.0
+
+# If no tool call starts or completes for this many seconds after
+# the last tool activity, we consider the LLM "stalled" and send
+# a nudge message asking it to wrap up.
+STALL_DETECTION_SECONDS = 30.0
+
+# The "skill" tool is the primary security scanning mechanism.
+# We track whether it has been invoked so we can nudge the LLM
+# if it is not using the security scanning skills.
+# "bash" running scanner commands (bandit, graudit, etc.) also counts.
+SCANNING_TOOL_NAMES = {"skill"}
 
 
 def _extract_tool_arguments(event_data) -> dict:
@@ -76,7 +95,8 @@ class SecurityScannerAgent:
     Main security scanning agent for AgentSec.
 
     This agent connects to the GitHub Copilot SDK, creates a session,
-    and uses skills (tools) to scan code for security vulnerabilities.
+    and uses Copilot CLI built-in tools (bash, skill, view) to scan
+    code for security vulnerabilities.
 
     The agent follows a simple lifecycle:
         1. __init__()    — create the agent object (no connections yet)
@@ -161,20 +181,25 @@ class SecurityScannerAgent:
             logger.error(f"Failed to initialize agent: {error}")
             raise
 
-    async def scan(self, folder_path: str) -> dict:
+    async def scan(self, folder_path: str, timeout: Optional[float] = None) -> dict:
         """
         Run a security scan on a folder.
 
         This sends a prompt to the LLM asking it to scan the given folder.
-        The LLM will call the skills (list_files, analyze_file, generate_report)
+        The LLM will use Copilot CLI built-in tools (bash, skill, view)
         automatically based on its instructions.
 
         Uses an event-driven approach so that tool executions (which emit
         progress events) happen in real time rather than being blocked.
 
+        The method also detects when the LLM "stalls" (stops calling tools
+        for too long) and sends a nudge message to get it back on track.
+
         Args:
             folder_path: Path to the folder to scan.
                          Example: "./src" or "C:\\code\\myapp"
+            timeout:     Maximum seconds to wait for the scan to finish.
+                         Defaults to DEFAULT_SCAN_TIMEOUT_SECONDS (300 s).
 
         Returns:
             A dictionary with:
@@ -194,6 +219,10 @@ class SecurityScannerAgent:
                 "error": "Agent not initialized. Call initialize() first.",
             }
 
+        # Use default timeout if none provided
+        if timeout is None:
+            timeout = DEFAULT_SCAN_TIMEOUT_SECONDS
+
         try:
             # Build the scan prompt using the configured template
             # The format_prompt method replaces {folder_path} placeholders
@@ -201,6 +230,7 @@ class SecurityScannerAgent:
 
             logger.info(f"Starting scan of {folder_path}")
             logger.debug(f"Using prompt: {scan_prompt[:200]}...")
+            logger.debug(f"Scan timeout: {timeout}s, stall detection: {STALL_DETECTION_SECONDS}s")
 
             # We collect the assistant's final response and track completion
             final_response = {"content": None}
@@ -209,6 +239,20 @@ class SecurityScannerAgent:
 
             # Reset tool call tracking for this scan
             self._tool_call_map = {}
+
+            # ── Stall & custom-tool tracking state ───────────────
+            # last_tool_activity_time tracks when the last tool started
+            # or completed (wall-clock). If this gets too far in the past,
+            # we send a nudge to the LLM.
+            last_tool_activity_time = {"value": time.time()}
+
+            # Track whether the LLM has invoked security scanning skills.
+            # If it only uses view/bash without running scanners, we nudge it.
+            scanner_was_invoked = {"value": False}
+
+            # Track how many nudges we've sent so we don't spam.
+            nudge_count = {"value": 0}
+            MAX_NUDGES = 2
 
             # Define event handler for session events
             # This receives ALL events emitted by the Copilot session
@@ -242,10 +286,30 @@ class SecurityScannerAgent:
                 try:
                     # Tool execution started — shows the LLM is calling a skill
                     if event.type == SessionEventType.TOOL_EXECUTION_START:
+                        # Record tool activity timestamp for stall detection
+                        last_tool_activity_time["value"] = time.time()
+
                         tool_name = getattr(event.data, 'tool_name', 'unknown')
                         tool_call_id = getattr(
                             event.data, 'tool_call_id', None
                         )
+
+                        # Check if the LLM is using security scanners
+                        if tool_name in SCANNING_TOOL_NAMES:
+                            scanner_was_invoked["value"] = True
+
+                        # Also count bash invocations of scanner tools
+                        # (e.g., bandit, graudit, trivy run directly)
+                        if tool_name == "bash" and tool_args:
+                            cmd = tool_args.get("command", "")
+                            scanner_cmds = {
+                                "bandit", "graudit", "guarddog",
+                                "shellcheck", "trivy", "checkov",
+                                "eslint", "dependency-check",
+                            }
+                            first_word = cmd.strip().split()[0] if cmd.strip() else ""
+                            if first_word in scanner_cmds:
+                                scanner_was_invoked["value"] = True
 
                         # Try to extract arguments for more detail about
                         # what specific file or command is being used
@@ -282,7 +346,6 @@ class SecurityScannerAgent:
                             )
                             if skill_name:
                                 detail = skill_name
-
                         # Store mapping so we can resolve names on completion
                         if tool_call_id:
                             self._tool_call_map[tool_call_id] = {
@@ -312,6 +375,9 @@ class SecurityScannerAgent:
 
                     # Tool execution completed
                     elif event.type == SessionEventType.TOOL_EXECUTION_COMPLETE:
+                        # Record tool activity timestamp for stall detection
+                        last_tool_activity_time["value"] = time.time()
+
                         tool_call_id = getattr(
                             event.data, 'tool_call_id', 'unknown'
                         )
@@ -387,19 +453,103 @@ class SecurityScannerAgent:
             await self.session.send(MessageOptions(prompt=scan_prompt))
             logger.debug("Prompt sent, waiting for session.idle event...")
 
-            # Wait for the scan to complete with a timeout
-            try:
-                await asyncio.wait_for(scan_complete.wait(), timeout=120.0)
-            except asyncio.TimeoutError:
-                logger.error(
-                    "Scan timed out after 120 seconds. "
-                    "The session never became idle. "
-                    "This may indicate the LLM did not call any tools."
+            # ── Wait loop with stall detection ───────────────────
+            # Instead of a single asyncio.wait_for(), we poll in a loop
+            # so we can detect stalls and send nudge messages.
+            scan_start_time = time.time()
+
+            while True:
+                # How much total time has elapsed?
+                elapsed = time.time() - scan_start_time
+                remaining = timeout - elapsed
+
+                if remaining <= 0:
+                    # Hard timeout reached
+                    logger.error(
+                        f"Scan timed out after {int(elapsed)} seconds. "
+                        "The session never became idle."
+                    )
+                    # Return whatever partial result we have
+                    if final_response["content"]:
+                        return {
+                            "status": "timeout",
+                            "result": final_response["content"],
+                            "error": (
+                                f"Scan timed out after {int(elapsed)}s but "
+                                "partial results are available."
+                            ),
+                        }
+                    return {
+                        "status": "timeout",
+                        "error": (
+                            f"Scan took too long (>{int(timeout)}s). "
+                            "The LLM did not complete the analysis. "
+                            "Try a smaller folder or check --verbose logs."
+                        ),
+                    }
+
+                # Wait for scan_complete with a short poll interval
+                # so we can check for stalls periodically
+                poll_interval = min(5.0, remaining)
+                try:
+                    await asyncio.wait_for(
+                        scan_complete.wait(), timeout=poll_interval
+                    )
+                    # scan_complete was set — break out of the loop
+                    break
+                except asyncio.TimeoutError:
+                    # scan_complete not yet set — check for stall
+                    pass
+
+                # ── Stall detection ──────────────────────────────
+                time_since_last_tool = (
+                    time.time() - last_tool_activity_time["value"]
                 )
-                return {
-                    "status": "timeout",
-                    "error": "Scan took too long (>120 seconds). Try a smaller folder.",
-                }
+
+                if (
+                    time_since_last_tool >= STALL_DETECTION_SECONDS
+                    and nudge_count["value"] < MAX_NUDGES
+                ):
+                    nudge_count["value"] += 1
+
+                    # Decide what nudge to send based on whether
+                    # security scanners have been invoked
+                    if not scanner_was_invoked["value"]:
+                        # The LLM has not run any security scanners yet.
+                        nudge_message = (
+                            "You should use the skill tool to run security "
+                            "scanners. Invoke skills like bandit-security-scan "
+                            "and graudit-security-scan to analyze the code in "
+                            f"{folder_path}. You can also run scanners directly "
+                            "via bash (e.g., bandit, graudit)."
+                        )
+                        logger.warning(
+                            f"LLM has not invoked any security scanners after "
+                            f"{int(time_since_last_tool)}s — sending nudge "
+                            f"(#{nudge_count['value']})"
+                        )
+                    else:
+                        # Scanners were run but the LLM seems stuck.
+                        nudge_message = (
+                            "If you have completed scanning, compile all "
+                            "findings into a structured security report and "
+                            "stop. If more scanning is needed, continue using "
+                            "the skill tool or bash to run additional scanners."
+                        )
+                        logger.warning(
+                            f"No tool activity for {int(time_since_last_tool)}s "
+                            f"— sending progress nudge (#{nudge_count['value']})"
+                        )
+
+                    # Send the nudge as a follow-up message in the session
+                    try:
+                        await self.session.send(
+                            MessageOptions(prompt=nudge_message)
+                        )
+                        # Reset the activity timer after sending a nudge
+                        last_tool_activity_time["value"] = time.time()
+                    except Exception as nudge_error:
+                        logger.debug(f"Failed to send nudge: {nudge_error}")
 
             # Check if there was an error
             if scan_error["error"]:
