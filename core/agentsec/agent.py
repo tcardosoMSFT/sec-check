@@ -292,10 +292,15 @@ class SecurityScannerAgent:
                             }
 
                         # Update progress tracker for file reads (view tool)
+                        # Only track actual files, not directories
                         if tool_name == "view" and file_path:
-                            tracker = get_global_tracker()
-                            if tracker:
-                                tracker.start_file(file_path)
+                            # Check if it's a directory by looking for file extension
+                            # or checking if the basename has a dot
+                            is_likely_file = "." in os.path.basename(file_path)
+                            if is_likely_file:
+                                tracker = get_global_tracker()
+                                if tracker:
+                                    tracker.start_file(file_path)
 
                         # Log with detail for better visibility
                         if detail:
@@ -320,10 +325,14 @@ class SecurityScannerAgent:
                         file_path = tool_info.get("file_path")
 
                         # Update progress tracker when a file read completes
+                        # Only track actual files, not directories
                         if tool_name == "view" and file_path:
-                            tracker = get_global_tracker()
-                            if tracker:
-                                tracker.finish_file(file_path, issues_found=0)
+                            # Check if it's a directory by looking for file extension
+                            is_likely_file = "." in os.path.basename(file_path)
+                            if is_likely_file:
+                                tracker = get_global_tracker()
+                                if tracker:
+                                    tracker.finish_file(file_path, issues_found=0)
 
                         # Log with tool name instead of opaque ID
                         if detail:

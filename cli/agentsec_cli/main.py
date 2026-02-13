@@ -406,14 +406,14 @@ async def run_scan(
         progress_tracker.start_scan(str(folder_path))
         result = await agent.scan(str(folder_path))
 
-        # Step 7b: Update progress tracker with actual counts from
-        # the agent's response, so the final summary line shows
-        # accurate numbers instead of approximate tool-based counts
+        # Step 7b: Update progress tracker with issue count from
+        # the agent's response (but keep the file count from the tracker
+        # since it accurately reflects what was actually scanned)
         if result["status"] == "success" and result.get("result"):
             actual_counts = _parse_result_counts(result["result"])
-            if actual_counts:
+            if actual_counts and "issues" in actual_counts:
+                # Only update issues count, not files count
                 progress_tracker.update_counts(
-                    files_scanned=actual_counts.get("files"),
                     issues_found=actual_counts.get("issues"),
                 )
 
