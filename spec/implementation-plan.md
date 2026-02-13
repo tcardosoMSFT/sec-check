@@ -689,6 +689,95 @@ print(prompt)  # Should include "./my-project"
 
 ---
 
+### [x] Task 1.7c — Implement Progress Tracking System `[S]`
+
+**Depends on**: 1.5, 1.6
+**COMMIT**: `feat(core): add ProgressTracker for real-time scan feedback`
+**STATUS**: ✅ COMPLETED
+
+**What was done**:
+
+1. Created `core/agentsec/progress.py` with:
+   - `ProgressEventType` enum — Types of progress events (SCAN_STARTED, FILE_STARTED, FILE_FINISHED, etc.)
+   - `ProgressEvent` dataclass — Event data (current file, files scanned, total files, issues found, elapsed time, percent complete)
+   - `ProgressTracker` class — Thread-safe tracker with heartbeat support
+   - `get_global_tracker()` / `set_global_tracker()` — Global tracker for skills to access
+
+2. Updated `core/agentsec/skills.py` to report progress:
+   - `list_files()` calls `tracker.set_total_files(count)` when files are discovered
+   - `analyze_file()` calls `tracker.start_file()` and `tracker.finish_file()` for each file
+
+3. Updated `cli/agentsec_cli/main.py` with progress display:
+   - Visual progress bar: `[████████░░░░░░░░░░░░] 50%`
+   - Spinner animation to show activity
+   - Current file being scanned
+   - Files scanned count / total files
+   - Elapsed time tracking
+   - Issues found counter
+   - Periodic heartbeat events (every 3 seconds)
+
+4. Added `core/tests/test_progress.py` with unit tests for progress tracking
+
+**Progress Display Example**:
+```
+⠋ Starting security scan of ./my_project
+
+  📁 Found 15 files to scan
+
+  ⠹ [██████████░░░░░░░░░░] 50% Scanning (8/15): app.py
+  ⚠️  Finished app.py: 2 issues found
+
+✅ Scan complete: 15 files scanned, 5 issues found (23s)
+```
+
+**Programmatic Usage**:
+```python
+from agentsec.progress import (
+    ProgressTracker,
+    ProgressEvent,
+    ProgressEventType,
+    set_global_tracker,
+)
+
+# Create callback for progress events
+def on_progress(event: ProgressEvent):
+    if event.type == ProgressEventType.FILE_STARTED:
+        print(f"Scanning: {event.current_file}")
+    elif event.type == ProgressEventType.SCAN_FINISHED:
+        print(f"Done: {event.issues_found} issues in {event.elapsed_seconds:.1f}s")
+
+# Create and register tracker
+tracker = ProgressTracker(callback=on_progress, heartbeat_interval=3.0)
+set_global_tracker(tracker)
+
+# Run scan (skills automatically report progress)
+tracker.start_scan("./project")
+result = await agent.scan("./project")
+tracker.finish_scan()
+
+# Clean up
+set_global_tracker(None)
+```
+
+**Verification**:
+```python
+from agentsec.progress import ProgressTracker, ProgressEventType
+
+events = []
+tracker = ProgressTracker(callback=lambda e: events.append(e), heartbeat_interval=0)
+tracker.start_scan("/test")
+tracker.set_total_files(2)
+tracker.start_file("file1.py")
+tracker.finish_file("file1.py", issues_found=1)
+tracker.finish_scan()
+
+assert any(e.type == ProgressEventType.SCAN_STARTED for e in events)
+assert any(e.type == ProgressEventType.FILE_FINISHED for e in events)
+print("Progress tracking OK")
+```
+
+---
+
 ### [ ] Task 1.8 — Create verification test script `[S]`
 
 **Depends on**: 1.7
@@ -837,8 +926,8 @@ Task 1.1 ───────────────────────�
   (root files)         [PARALLEL] │
                                   ├──► Task 1.3 ──► Task 1.4 ──┬──► Task 1.5 ─┐
 Task 1.2 ─────────────────────────┘     (venv)      (list_files)│  (analyze)   │
-  (core scaffolding)   [PARALLEL]                               │              ├──► Task 1.7 ──► Task 1.7b ──► Task 1.8
-                                                                └──► Task 1.6 ─┘   (agent)       (config)       (tests)
+  (core scaffolding)   [PARALLEL]                               │              ├──► Task 1.7 ──► Task 1.7b ──► Task 1.7c ──► Task 1.8
+                                                                └──► Task 1.6 ─┘   (agent)       (config)       (progress)    (tests)
                                                                     (report)
 ```
 
@@ -902,13 +991,13 @@ Task 1.2 ───────────────────────�
 
 ### [x] Task 2.2 — Implement CLI main entry point `[S]`
 
-**Depends on**: 2.1, 1.7b
+**Depends on**: 2.1, 1.7b, 1.7c
 **COMMIT**: `feat(cli): implement scan command with argparse, config support, and progress output`
 **STATUS**: ✅ COMPLETED
 
 **What was done**:
 
-Implemented `cli/agentsec_cli/main.py` with full configuration support:
+Implemented `cli/agentsec_cli/main.py` with full configuration and progress support:
 
 1. **Configuration options for scan command**:
    - `--config`, `-c`: Path to YAML config file
@@ -925,6 +1014,15 @@ Implemented `cli/agentsec_cli/main.py` with full configuration support:
 3. **Mutual exclusivity**:
    - `--system-message` and `--system-message-file` are mutually exclusive
    - `--prompt` and `--prompt-file` are mutually exclusive
+
+4. **Progress display features**:
+   - Visual progress bar: `[████████░░░░░░░░░░░░] 50%`
+   - Animated spinner to show activity
+   - Current file being scanned
+   - Files scanned count / total files
+   - Elapsed time tracking
+   - Issues found counter
+   - Heartbeat events every 3 seconds to show ongoing activity
 
 **Usage examples**:
 ```bash

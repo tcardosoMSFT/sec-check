@@ -11,6 +11,7 @@ agentsec/
 │   └── agentsec/
 │       ├── agent.py      # SecurityScannerAgent class
 │       ├── config.py     # AgentSecConfig for customization
+│       ├── progress.py   # ProgressTracker for real-time feedback
 │       └── skills.py     # @tool decorated skill functions
 ├── cli/                  # Command-line interface (Python)
 │   └── agentsec_cli/
@@ -213,6 +214,99 @@ See [agentsec.example.yaml](../agentsec.example.yaml) for a full example with co
 
 ---
 
+## Progress Tracking System
+
+AgentSec provides real-time progress feedback during scans. The `ProgressTracker` class in `core/agentsec/progress.py` manages progress state and emits events.
+
+### CLI Progress Display
+
+The CLI shows a visual progress display:
+```
+⠋ Starting security scan of ./my_project
+
+  📁 Found 15 files to scan
+
+  ⠹ [██████████░░░░░░░░░░] 50% Scanning (8/15): app.py
+  ⚠️  Finished app.py: 2 issues found
+
+✅ Scan complete: 15 files scanned, 5 issues found (23s)
+```
+
+### Using Progress Tracking Programmatically
+
+```python
+from agentsec.progress import (
+    ProgressTracker,
+    ProgressEvent,
+    ProgressEventType,
+    set_global_tracker,
+)
+
+# Create a callback to handle progress events
+def on_progress(event: ProgressEvent):
+    if event.type == ProgressEventType.FILE_STARTED:
+        print(f"Scanning: {event.current_file}")
+    elif event.type == ProgressEventType.FILE_FINISHED:
+        print(f"Done: {event.files_scanned}/{event.total_files}")
+    elif event.type == ProgressEventType.SCAN_FINISHED:
+        print(f"Complete: {event.issues_found} issues ({event.elapsed_seconds:.1f}s)")
+
+# Create and register the tracker
+tracker = ProgressTracker(
+    callback=on_progress,
+    heartbeat_interval=3.0  # Emit heartbeat every 3 seconds
+)
+set_global_tracker(tracker)
+
+# Run the scan (skills automatically report progress)
+tracker.start_scan("./project")
+result = await agent.scan("./project")
+tracker.finish_scan()
+
+# Clean up
+set_global_tracker(None)
+```
+
+### Progress Event Types
+
+| Event | Description | Key Fields |
+|-------|-------------|------------|
+| `SCAN_STARTED` | Scan begins | `message` |
+| `FILES_DISCOVERED` | Total files determined | `total_files` |
+| `FILE_STARTED` | Started analyzing file | `current_file`, `files_scanned` |
+| `FILE_FINISHED` | File analysis complete | `current_file`, `issues_found` |
+| `HEARTBEAT` | Periodic alive signal | `elapsed_seconds`, `percent_complete` |
+| `SCAN_FINISHED` | Scan complete | `files_scanned`, `issues_found`, `elapsed_seconds` |
+| `WARNING` | Non-fatal issue | `message` |
+| `ERROR` | Serious problem | `message` |
+
+### Skills Integration
+
+Skills automatically report progress via the global tracker:
+
+```python
+from agentsec.progress import get_global_tracker
+
+@tool(description="Analyze a file")
+async def analyze_file(file_path: str) -> dict:
+    tracker = get_global_tracker()
+    
+    # Report start
+    if tracker:
+        tracker.start_file(file_path)
+    
+    try:
+        # ... do analysis ...
+        issues = check_for_issues(file_path)
+        return {"issues": issues}
+    finally:
+        # Report completion
+        if tracker:
+            tracker.finish_file(file_path, issues_found=len(issues))
+```
+
+---
+
 ## Project-Specific Patterns & Conventions
 
 ### Python Patterns (MANDATORY for this project)
@@ -369,6 +463,7 @@ All Python code uses `.vscode/python-copilot-sdk.instructions.md` for detailed a
 | `agentsec.example.yaml` | Example configuration file with documentation |
 | `core/agentsec/agent.py` | SecurityScannerAgent entry point |
 | `core/agentsec/config.py` | AgentSecConfig for customizable prompts |
+| `core/agentsec/progress.py` | ProgressTracker for real-time scan feedback |
 | `core/agentsec/skills.py` | @tool skill definitions |
 | `cli/agentsec_cli/main.py` | CLI command routing with config options |
 | `desktop/backend/server.py` | FastAPI + agent exposure |
@@ -412,6 +507,9 @@ A: Two paths: `agentsec scan <folder>` (CLI) or Desktop GUI (Electron)
 
 **Q: How does real-time progress work in the GUI?**  
 A: FastAPI endpoint returns Server-Sent Events (SSE) stream
+
+**Q: How does progress tracking work in the CLI?**  
+A: The `ProgressTracker` class emits events; CLI displays progress bar, spinner, file counts, and elapsed time
 
 **Q: Can the CLI and GUI use the same agent code?**  
 A: Yes! Both import `SecurityScannerAgent` from core package
@@ -639,6 +737,7 @@ Before submitting code:
 - [ ] Agent/skill functions have type hints
 - [ ] Try-finally blocks clean up SDK resources
 - [ ] Skills decorated with `@tool`
+- [ ] Skills report progress via `get_global_tracker()` when appropriate
 - [ ] Session IDs include meaningful context
 - [ ] Long operations use event handlers, not `send_and_wait`
 - [ ] FastAPI has CORS configured for frontend

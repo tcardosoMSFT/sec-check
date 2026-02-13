@@ -128,6 +128,7 @@ Build a cross-platform security scanning application using GitHub Copilot SDK (h
 - `agentsec/core/agentsec/agent.py` — Define `SecurityScannerAgent` using `Agent()` class with system instructions and tool registration
 - `agentsec/core/agentsec/skills.py` — Implement `@tool` decorated functions for file scanning skills: `list_files`, `analyze_file`, `generate_report`
 - `agentsec/core/agentsec/config.py` — Configuration management with `AgentSecConfig` class for loading YAML config and CLI overrides
+- `agentsec/core/agentsec/progress.py` — Progress tracking with `ProgressTracker` class for real-time scan feedback
 - `agentsec/core/pyproject.toml` — Python package config with dependencies on `agent-framework-core==1.0.0b260107` and `pyyaml>=6.0`
 - `agentsec/core/README.md` — Agent architecture and skills development documentation
 
@@ -190,6 +191,7 @@ Build a cross-platform security scanning application using GitHub Copilot SDK (h
 - [ ] Run: `agentsec scan ./test-folder`
 - [ ] Confirm scan completes without errors
 - [ ] Validate output shows file list and mock findings
+- [ ] Verify progress indicators (spinner, progress bar, file counts)
 
 **Phase 3 Verification:**
 - [ ] Start FastAPI server: `python desktop/backend/server.py`
@@ -302,6 +304,7 @@ Build a cross-platform security scanning application using GitHub Copilot SDK (h
 - ✅ Configuration system (YAML config file + CLI overrides)
 - ✅ Customizable system message and initial prompt
 - ✅ External prompt file support
+- ✅ **Progress tracking system** — Real-time feedback on files being scanned
 - ✅ Next.js GUI with folder selection and results display
 - ✅ Electron wrapper with FastAPI subprocess management
 - ✅ Basic documentation (README files, .env.example, agentsec.example.yaml)

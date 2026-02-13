@@ -12,6 +12,7 @@ pip install -e ./core
 
 - `agentsec/agent.py` — `SecurityScannerAgent` class (main entry point)
 - `agentsec/config.py` — `AgentSecConfig` class for configuration management
+- `agentsec/progress.py` — `ProgressTracker` class for real-time scan feedback
 - `agentsec/skills.py` — `@tool` skill functions (list_files, analyze_file, generate_report)
 - `tests/` — Unit and integration tests
 
@@ -73,3 +74,50 @@ try:
 finally:
     await agent.cleanup()
 ```
+
+## Progress Tracking
+
+The core package provides a `ProgressTracker` class for real-time scan feedback:
+
+```python
+from agentsec.progress import (
+    ProgressTracker,
+    ProgressEvent,
+    ProgressEventType,
+    set_global_tracker,
+)
+
+# Create a callback to handle progress events
+def on_progress(event: ProgressEvent):
+    if event.type == ProgressEventType.FILE_STARTED:
+        print(f"Scanning: {event.current_file}")
+    elif event.type == ProgressEventType.FILE_FINISHED:
+        print(f"Done: {event.files_scanned}/{event.total_files} files")
+    elif event.type == ProgressEventType.SCAN_FINISHED:
+        print(f"Complete: {event.issues_found} issues in {event.elapsed_seconds:.1f}s")
+
+# Create and register the tracker
+tracker = ProgressTracker(callback=on_progress, heartbeat_interval=3.0)
+set_global_tracker(tracker)
+
+# Run the scan (skills will automatically report progress)
+tracker.start_scan("./my-project")
+result = await agent.scan("./my-project")
+tracker.finish_scan()
+
+# Clear the tracker when done
+set_global_tracker(None)
+```
+
+### Progress Events
+
+| Event Type | Description |
+|------------|-------------|
+| `SCAN_STARTED` | Scan has begun |
+| `FILES_DISCOVERED` | Total files to scan has been determined |
+| `FILE_STARTED` | Started analyzing a specific file |
+| `FILE_FINISHED` | Finished analyzing a file (includes issue count) |
+| `HEARTBEAT` | Periodic update showing scan is still active |
+| `SCAN_FINISHED` | Scan complete with final summary |
+| `WARNING` | Non-fatal issue during scan |
+| `ERROR` | Serious problem during scan |

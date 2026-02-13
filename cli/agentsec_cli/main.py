@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -32,6 +33,135 @@ logging.basicConfig(
     format="%(message)s",  # Simple format for CLI output
 )
 logger = logging.getLogger(__name__)
+
+
+def create_progress_display():
+    """
+    Create a progress display callback for the CLI.
+
+    This function returns a callback that prints progress updates
+    to the terminal in a visually appealing way. It uses ANSI escape
+    codes when available to show a dynamic progress bar.
+
+    Returns:
+        A callback function that accepts ProgressEvent objects
+    """
+    # Track state for the progress display
+    last_update_time = [0.0]  # Use list to allow mutation in closure
+    spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    spinner_index = [0]
+
+    def display_progress(event):
+        """
+        Display a progress event in the terminal.
+
+        This callback is called by the ProgressTracker whenever
+        something happens during the scan. It formats the event
+        and prints it to the terminal.
+
+        Args:
+            event: A ProgressEvent object from the tracker
+        """
+        from agentsec.progress import ProgressEventType
+
+        # Get a spinner character for visual feedback
+        spinner = spinner_chars[spinner_index[0] % len(spinner_chars)]
+        spinner_index[0] += 1
+
+        # Format elapsed time
+        elapsed = event.elapsed_seconds
+        minutes = int(elapsed // 60)
+        seconds = int(elapsed % 60)
+        time_str = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+
+        # Handle different event types
+        if event.type == ProgressEventType.SCAN_STARTED:
+            print(f"\n{spinner} {event.message}")
+            print()
+
+        elif event.type == ProgressEventType.FILES_DISCOVERED:
+            print(f"  📁 {event.message}")
+            print()
+
+        elif event.type == ProgressEventType.FILE_STARTED:
+            # Print the current file being scanned
+            # Use carriage return to overwrite the line for a cleaner look
+            if event.total_files > 0:
+                percent = (event.files_scanned / event.total_files) * 100
+                progress_bar = create_progress_bar(percent)
+                line = f"  {spinner} {progress_bar} {event.message}"
+            else:
+                line = f"  {spinner} {event.message}"
+
+            # Print with carriage return to allow overwriting
+            print(f"\r{line}", end="", flush=True)
+
+        elif event.type == ProgressEventType.FILE_FINISHED:
+            # Clear the line and print the finished file status
+            # Only print if there were issues found
+            if event.issues_found > event.files_scanned - 1:
+                # New issues found in this file
+                clear_line = "\r" + " " * 80 + "\r"
+                if "issues found" in event.message and "no issues" not in event.message:
+                    print(f"{clear_line}  ⚠️  {event.message}")
+
+        elif event.type == ProgressEventType.HEARTBEAT:
+            # Print heartbeat to show the scan is still running
+            if event.total_files > 0:
+                percent = (event.files_scanned / event.total_files) * 100
+                progress_bar = create_progress_bar(percent)
+                line = f"  {spinner} {progress_bar} {event.files_scanned}/{event.total_files} files ({time_str})"
+            else:
+                line = f"  {spinner} {event.files_scanned} files scanned ({time_str})"
+
+            print(f"\r{line}", end="", flush=True)
+
+        elif event.type == ProgressEventType.SCAN_FINISHED:
+            # Clear any partial line and print final summary
+            print(f"\r" + " " * 80)  # Clear line
+            print(f"✅ {event.message}")
+            print()
+
+        elif event.type == ProgressEventType.WARNING:
+            print(f"\n  ⚠️  Warning: {event.message}")
+
+        elif event.type == ProgressEventType.ERROR:
+            print(f"\n  ❌ Error: {event.message}")
+
+    return display_progress
+
+
+def create_progress_bar(percent: float, width: int = 20) -> str:
+    """
+    Create a text-based progress bar.
+
+    This function generates a visual progress bar using Unicode
+    block characters. The bar fills from left to right based on
+    the completion percentage.
+
+    Args:
+        percent: Completion percentage (0-100)
+        width: Width of the progress bar in characters (default 20)
+
+    Returns:
+        A string like "[████████░░░░░░░░░░░░] 40%"
+
+    Example:
+        >>> print(create_progress_bar(50))
+        [██████████░░░░░░░░░░] 50%
+    """
+    # Calculate how many filled blocks we need
+    filled = int(width * percent / 100)
+    empty = width - filled
+
+    # Use block characters for the bar
+    filled_char = "█"
+    empty_char = "░"
+
+    # Build the progress bar string
+    bar = filled_char * filled + empty_char * empty
+
+    return f"[{bar}] {percent:3.0f}%"
 
 
 async def run_scan(
@@ -80,6 +210,7 @@ async def run_scan(
     try:
         from agentsec.agent import SecurityScannerAgent
         from agentsec.config import AgentSecConfig
+        from agentsec.progress import ProgressTracker, set_global_tracker
     except ImportError as import_error:
         print(
             f"Error: Could not import SecurityScannerAgent: {import_error}\n"
@@ -111,20 +242,25 @@ async def run_scan(
     # Step 4: Create the agent with the loaded configuration
     agent = SecurityScannerAgent(config=config)
 
+    # Step 5: Set up progress tracking for real-time feedback
+    progress_callback = create_progress_display()
+    progress_tracker = ProgressTracker(
+        callback=progress_callback,
+        heartbeat_interval=3.0,  # Show heartbeat every 3 seconds
+    )
+    set_global_tracker(progress_tracker)
+
     try:
-        # Step 5: Initialize (connect to Copilot)
+        # Step 6: Initialize (connect to Copilot)
         print("Starting AgentSec security scanner...")
-        print()
         await agent.initialize()
 
-        # Step 6: Run the scan
-        print(f"Scanning: {folder_path}")
-        print("This may take a moment...")
-        print()
-
+        # Step 7: Run the scan with progress tracking
+        progress_tracker.start_scan(str(folder_path))
         result = await agent.scan(str(folder_path))
+        progress_tracker.finish_scan()
 
-        # Step 7: Display results based on status
+        # Step 8: Display results based on status
         if result["status"] == "success":
             print(result["result"])
             return 0
@@ -138,6 +274,7 @@ async def run_scan(
             return 1
 
     except FileNotFoundError:
+        progress_tracker.finish_scan()
         print(
             "Error: Copilot CLI not found.\n"
             "Install it: https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli\n"
@@ -147,11 +284,13 @@ async def run_scan(
         return 1
 
     except Exception as error:
+        progress_tracker.finish_scan()
         print(f"Unexpected error: {error}", file=sys.stderr)
         return 1
 
     finally:
-        # Step 8: Always clean up resources
+        # Step 9: Always clean up resources
+        set_global_tracker(None)  # Clear the global tracker
         await agent.cleanup()
 
 

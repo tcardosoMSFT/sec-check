@@ -44,7 +44,30 @@ pip install -e ./cli        # Install CLI package
 agentsec scan ./my_project
 ```
 
-This scans all files in `./my_project` and prints a security report to your terminal.
+This scans all files in `./my_project` and prints a security report to your terminal with real-time progress indicators.
+
+### Progress Display
+
+When scanning, you'll see real-time progress:
+
+```
+⠋ Starting security scan of ./my_project
+
+  📁 Found 15 files to scan
+
+  ⠹ [██████████░░░░░░░░░░] 50% Scanning (8/15): app.py
+  ⚠️  Finished app.py: 2 issues found
+
+✅ Scan complete: 15 files scanned, 5 issues found (23s)
+```
+
+Features:
+- Visual progress bar with percentage
+- Current file being scanned
+- Files scanned count / total files
+- Elapsed time tracking
+- Issues found counter
+- Spinner animation to show work is ongoing
 
 ### Scan the current directory
 

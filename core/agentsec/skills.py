@@ -21,6 +21,9 @@ except ImportError:
             return func
         return decorator
 
+# Import progress tracking to report scanning progress
+from agentsec.progress import get_global_tracker
+
 # Set up logging so we can track what the skills are doing
 logger = logging.getLogger(__name__)
 
@@ -95,6 +98,11 @@ async def list_files(folder_path: str) -> dict:
 
         logger.info(f"Listed {len(files_found)} files in {folder_path}")
 
+        # Report the total files discovered to the progress tracker
+        tracker = get_global_tracker()
+        if tracker:
+            tracker.set_total_files(len(files_found))
+
         return {
             "files": files_found,
             "total": len(files_found),
@@ -153,6 +161,11 @@ async def analyze_file(file_path: str) -> dict:
         >>> for issue in result["issues"]:
         ...     print(f"[{issue['severity']}] {issue['message']} (line {issue['line']})")
     """
+    # Report that we're starting to scan this file
+    tracker = get_global_tracker()
+    if tracker:
+        tracker.start_file(file_path)
+
     try:
         # Step 1: Read the file content
         with open(file_path, "r", encoding="utf-8", errors="replace") as file:
@@ -224,6 +237,10 @@ async def analyze_file(file_path: str) -> dict:
 
         logger.info(f"Analyzed {file_path}: {len(issues)} issues found")
 
+        # Report that we finished scanning this file
+        if tracker:
+            tracker.finish_file(file_path, issues_found=len(issues))
+
         return {
             "file": file_path,
             "issues": issues,
@@ -233,6 +250,9 @@ async def analyze_file(file_path: str) -> dict:
 
     except FileNotFoundError:
         logger.error(f"File not found: {file_path}")
+        # Report error but still mark file as processed
+        if tracker:
+            tracker.finish_file(file_path, issues_found=1)
         return {
             "file": file_path,
             "issues": [{"type": "error", "message": f"File not found: {file_path}", "severity": "HIGH", "line": 0}],
@@ -241,6 +261,9 @@ async def analyze_file(file_path: str) -> dict:
         }
     except Exception as error:
         logger.error(f"Error analyzing {file_path}: {error}")
+        # Report error but still mark file as processed
+        if tracker:
+            tracker.finish_file(file_path, issues_found=1)
         return {
             "file": file_path,
             "issues": [{"type": "error", "message": str(error), "severity": "HIGH", "line": 0}],

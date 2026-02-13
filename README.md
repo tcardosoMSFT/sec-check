@@ -79,6 +79,29 @@ AgentSec currently detects:
 - ⚠️ **Medium Risk**: Hardcoded credentials and secrets
 - ℹ️ **Low Risk**: Potentially dangerous imports (`subprocess`, `os`, `pickle`)
 
+## Progress Tracking
+
+AgentSec provides real-time progress feedback during scans:
+
+```
+⠋ Starting security scan of ./my_project
+
+  📁 Found 15 files to scan
+
+  ⠹ [██████████░░░░░░░░░░] 50% Scanning (8/15): app.py
+  ⚠️  Finished app.py: 2 issues found
+
+✅ Scan complete: 15 files scanned, 5 issues found (23s)
+```
+
+Features:
+- Visual progress bar with percentage
+- Current file being scanned
+- Files scanned count / total files
+- Elapsed time tracking
+- Issues found counter
+- Periodic heartbeat to show work is ongoing
+
 ## Configuration
 
 AgentSec can be configured via:
