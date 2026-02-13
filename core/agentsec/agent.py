@@ -53,7 +53,10 @@ DEFAULT_SCAN_TIMEOUT_SECONDS = 300.0
 # If no tool call starts or completes for this many seconds after
 # the last tool activity, we consider the LLM "stalled" and send
 # a nudge message asking it to wrap up.
-STALL_DETECTION_SECONDS = 30.0
+# 45 s gives the LLM enough time to begin composing a report or
+# transition between scanning phases without triggering a false
+# nudge, while still catching genuine stalls quickly.
+STALL_DETECTION_SECONDS = 45.0
 
 # The "skill" tool is the primary security scanning mechanism.
 # We track whether it has been invoked so we can nudge the LLM
@@ -445,6 +448,13 @@ class SecurityScannerAgent:
 
                     # Assistant message — the LLM's text response
                     elif event.type == SessionEventType.ASSISTANT_MESSAGE:
+                        # Count assistant messages as activity.
+                        # When the LLM is generating a report it streams
+                        # text without calling tools.  That is productive
+                        # work, not a stall, so we reset the timer here
+                        # to avoid false nudges during report generation.
+                        last_tool_activity_time["value"] = time.time()
+
                         if event.data and hasattr(event.data, 'content'):
                             content = event.data.content
                             logger.debug(f"[ASSISTANT] {content[:200] if content else '(empty)'}...")
@@ -571,10 +581,18 @@ class SecurityScannerAgent:
                         )
                     else:
                         # Scanners were run but the LLM seems stuck.
+                        # The most common cause is the LLM composing a
+                        # lengthy report as pure text without tool calls.
+                        # We nudge it to write the report to a file via
+                        # bash so that tool activity is generated and
+                        # progress stays visible.
                         nudge_message = (
-                            "If you have completed scanning, compile all "
-                            "findings into a structured security report and "
-                            "stop. If more scanning is needed, continue using "
+                            "If you have completed scanning, use bash to "
+                            "write your findings into a Markdown report "
+                            "file in the target folder (e.g. "
+                            "cat > report.md << 'REPORT' ... REPORT). "
+                            "Then provide a brief summary and stop. "
+                            "If more scanning is needed, continue using "
                             "the skill tool or bash to run additional scanners."
                         )
                         logger.warning(

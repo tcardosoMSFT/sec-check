@@ -135,12 +135,23 @@ Use the `skill` tool and/or `bash` to invoke appropriate scanners:
 Use `view` to read suspicious files identified by scanners for deeper analysis.
 
 ### Step 4: Generate Report
-Compile all findings into a structured Markdown report with:
+Use `bash` to write the security report to a Markdown file in the target folder.
+For example:
+```
+cat > <folder>/security-report.md << 'REPORT'
+... report content ...
+REPORT
+```
+This keeps your progress visible while writing.
+
+The report must include:
 - Executive summary with risk level
 - Severity counts (CRITICAL / HIGH / MEDIUM / LOW)
 - Per-file findings with line numbers and vulnerable code snippets
 - Remediation recommendations for each finding
 - A prioritized remediation checklist
+
+After writing the report file, provide a brief summary of findings to the user.
 
 ---
 
