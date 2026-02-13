@@ -11,6 +11,9 @@ __version__ = "0.1.0"
 # Import configuration (always available, no external dependencies)
 from agentsec.config import AgentSecConfig
 
+# Import skill discovery (always available, no external dependencies)
+from agentsec.skill_discovery import discover_all_skills, get_skill_summary
+
 # Import progress tracking (always available, no external dependencies)
 from agentsec.progress import (
     ProgressTracker,
@@ -26,6 +29,8 @@ try:
     __all__ = [
         "SecurityScannerAgent",
         "AgentSecConfig",
+        "discover_all_skills",
+        "get_skill_summary",
         "ProgressTracker",
         "ProgressEvent",
         "ProgressEventType",
@@ -35,9 +40,11 @@ try:
     ]
 except ImportError:
     # If the Copilot SDK is not installed, the agent class won't be available.
-    # Config, progress tracking, and skills can still be used for testing.
+    # Config, progress tracking, skills, and discovery can still be used.
     __all__ = [
         "AgentSecConfig",
+        "discover_all_skills",
+        "get_skill_summary",
         "ProgressTracker",
         "ProgressEvent",
         "ProgressEventType",

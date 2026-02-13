@@ -1074,6 +1074,52 @@ Updated `cli/README.md` with:
 
 ---
 
+### [x] Task 2.2b — Dynamic skill discovery from Copilot CLI `[S]`
+
+**Depends on**: 2.2
+**COMMIT**: `feat(core): add dynamic Copilot CLI skill discovery with tool availability checking`
+**STATUS**: ✅ COMPLETED
+
+**What was done**:
+
+Replaced the hardcoded external tool list in the CLI with dynamic discovery that mirrors how the Copilot CLI finds agentic skills.
+
+1. Created `core/agentsec/skill_discovery.py` with:
+   - `discover_all_skills(project_root)`: Scans `~/.copilot/skills/` (user-level) and `<project>/.copilot/skills/` (project-level) for skill directories containing `SKILL.md`
+   - `get_skill_summary(skills)`: Returns counts of total, available, unavailable, user-level, and project-level skills
+   - `_parse_skill_frontmatter(path)`: Parses YAML frontmatter from `SKILL.md` without requiring PyYAML
+   - `_derive_tool_name(dir_name)`: Falls back to stripping `-security-scan` suffix when skill is not in the known map
+   - `SKILL_TO_TOOL_MAP`: Maps 9 known skill directory names to their underlying CLI tool binary names
+   - Tool availability checked via `shutil.which()` at runtime
+
+2. Updated `cli/agentsec_cli/main.py`:
+   - `print_available_skills(folder_path)` now calls `discover_all_skills()` instead of printing a hardcoded list
+   - Shows source directories with skill counts
+   - Displays each tool with ✅ (installed) or ⬜ (not installed) status
+
+3. Updated `core/agentsec/__init__.py`:
+   - Exported `discover_all_skills` and `get_skill_summary`
+
+**Skills discovered** (from `~/.copilot/skills/`):
+- bandit ✅, checkov ✅, dependency-check ✅, eslint ✅, graudit ✅, guarddog ✅, shellcheck ✅, trivy ✅, template-analyzer ⬜
+
+**CLI output example**:
+```
+📋 Available scanning skills:
+  Built-in skills (registered @tool functions):
+    • list_files       — Discover files in target directory
+    • analyze_file     — Analyze a file for security vulnerabilities
+    • generate_report  — Generate a formatted vulnerability report
+  Copilot CLI agentic skills (8/9 tools available):
+    📂 ~/.copilot/skills/ (9 skills)
+    ✅ bandit               — Security audit of Python source code for vulnerabilities using Bandit AST analysis.
+    ✅ checkov              — Scan IaC for security misconfigurations using Checkov.
+    ...
+    ⬜ template-analyzer    — Scan ARM/Bicep templates for security issues. (not installed)
+```
+
+---
+
 ### [ ] Task 2.4 — Verify CLI end-to-end `[S]`
 
 **Depends on**: 2.2
@@ -1110,8 +1156,9 @@ Updated `cli/README.md` with:
 ## Phase 2 Dependency Graph
 
 ```
-Task 1.7b (config) ──► Task 2.1 ──► Task 2.2 ──┬──► Task 2.3 (README) [PARALLEL]
-                        (scaffold)   (main.py)   └──► Task 2.4 (e2e verify) [SEQUENTIAL]
+Task 1.7b (config) ──► Task 2.1 ──► Task 2.2 ──┬──► Task 2.2b (skill discovery) [SEQUENTIAL] ✅
+                        (scaffold)   (main.py)   ├──► Task 2.3 (README) [PARALLEL]
+                                                 └──► Task 2.4 (e2e verify) [SEQUENTIAL]
 ```
 
 ---
@@ -2880,6 +2927,7 @@ The **critical path** — the longest chain of sequential dependencies that dete
 | 1 | 1.8 | Unit tests for skills | 1.7b | Sequential | |
 | 2 | 2.1 | CLI package scaffolding | 1.7b | Sequential | ✅ |
 | 2 | 2.2 | CLI main.py with config support | 2.1 | Sequential | ✅ |
+| 2 | 2.2b | Dynamic skill discovery | 2.2 | Sequential | ✅ |
 | 2 | 2.3 | CLI README | 2.2 | P with 2.4 | ✅ |
 | 2 | 2.4 | CLI end-to-end verification | 2.2 | Sequential | |
 | 3 | 3.1 | Backend package scaffolding | 1.7b | P with 3.2 | |

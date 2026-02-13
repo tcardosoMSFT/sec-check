@@ -189,38 +189,65 @@ def create_progress_bar(percent: float, width: int = 20) -> str:
     return f"[{bar}] {percent:3.0f}%"
 
 
-def print_available_skills() -> None:
+def print_available_skills(folder_path: Optional[str] = None) -> None:
     """
     Print the available scanning skills and external tools.
 
-    This shows the user which built-in skills the agent has registered
-    and which external security tools are available on the system.
-    External tools (like bandit, graudit) provide deeper analysis
-    when the agent invokes them via the bash tool.
+    This function dynamically discovers Copilot CLI agentic skills by
+    scanning the two directories where the Copilot CLI looks for them:
+      1. User-level:    ~/.copilot/skills/
+      2. Project-level: <project>/.copilot/skills/
+
+    Each skill directory contains a SKILL.md file with YAML frontmatter
+    (name, description). The function maps each skill to its underlying
+    CLI tool and checks whether that tool is installed on the system.
+
+    Args:
+        folder_path: Path to the project root. Used to find project-level
+                     skills in <folder_path>/.copilot/skills/.
+                     If None, only user-level skills are checked.
     """
-    import shutil
+    # Import the dynamic skill discovery module from core
+    from agentsec.skill_discovery import discover_all_skills, get_skill_summary
 
     print("\n📋 Available scanning skills:")
-    print("  Built-in skills:")
+    print("  Built-in skills (registered @tool functions):")
     print("    • list_files       — Discover files in target directory")
     print("    • analyze_file     — Analyze a file for security vulnerabilities")
     print("    • generate_report  — Generate a formatted vulnerability report")
-    print("  External security tools (auto-detected):")
 
-    # List of external tools the agent may use, with descriptions
-    external_tools = [
-        ("bandit", "Python AST security scanner (eval, exec, secrets)"),
-        ("graudit", "Pattern-based multi-language scanner (secrets, exec, SQL, XSS)"),
-        ("semgrep", "Semantic code analysis for security patterns"),
-        ("trivy", "Container and filesystem vulnerability scanner"),
-        ("shellcheck", "Shell script security analyzer"),
-    ]
+    # Dynamically discover Copilot CLI agentic skills
+    # The Copilot CLI looks in ~/.copilot/skills/ (user) and
+    # <project>/.copilot/skills/ (project) for skill definitions
+    skills = discover_all_skills(project_root=folder_path)
+    summary = get_skill_summary(skills)
 
-    for tool_name, description in external_tools:
-        if shutil.which(tool_name):
-            print(f"    ✅ {tool_name:<14} — {description}")
+    if summary["total"] == 0:
+        print("  Copilot CLI agentic skills:")
+        print("    (none found — add skills to ~/.copilot/skills/)")
+        print()
+        return
+
+    print(
+        f"  Copilot CLI agentic skills "
+        f"({summary['available']}/{summary['total']} tools available):"
+    )
+
+    # Show where skills were discovered from
+    if summary["user_count"] > 0:
+        print(f"    📂 ~/.copilot/skills/ ({summary['user_count']} skills)")
+    if summary["project_count"] > 0:
+        print(f"    📂 .copilot/skills/   ({summary['project_count']} skills)")
+
+    # Print each discovered skill with availability status
+    for skill in skills:
+        tool_name = skill["tool_name"]
+        description = skill["description"]
+
+        if skill["tool_available"]:
+            print(f"    ✅ {tool_name:<20} — {description}")
         else:
-            print(f"    ⬜ {tool_name:<14} — {description} (not installed)")
+            print(f"    ⬜ {tool_name:<20} — {description} (not installed)")
 
     print()
 
@@ -400,7 +427,8 @@ async def run_scan(
         await agent.initialize()
 
         # Step 6b: Show available scanning skills and external tools
-        print_available_skills()
+        # Pass the folder path so project-level skills can also be found
+        print_available_skills(folder_path=str(folder_path))
 
         # Step 7: Run the scan with progress tracking
         progress_tracker.start_scan(str(folder_path))

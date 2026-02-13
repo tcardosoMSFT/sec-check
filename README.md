@@ -137,6 +137,33 @@ AgentSec uses the GitHub Copilot SDK to create an AI agent that:
 
 The agent is implemented in [core/agentsec/agent.py](core/agentsec/agent.py) and shared by both the CLI and Desktop app.
 
+## External Security Tools (Skill Discovery)
+
+AgentSec dynamically discovers Copilot CLI agentic skills at runtime instead of maintaining a hardcoded tool list. It scans the same directories the Copilot CLI uses:
+
+| Location | Scope | Path |
+|----------|-------|------|
+| **User-level** | All projects | `~/.copilot/skills/` |
+| **Project-level** | Current project only | `<project>/.copilot/skills/` |
+
+Each skill directory contains a `SKILL.md` file with YAML frontmatter describing the skill's name and purpose. AgentSec maps each skill to its underlying CLI tool and verifies availability on the system.
+
+**Currently discovered skills include:**
+
+| Tool | Description | Status |
+|------|-------------|--------|
+| bandit | Python AST security analysis | ✅ |
+| checkov | IaC misconfiguration scanning | ✅ |
+| dependency-check | CVE detection in dependencies | ✅ |
+| eslint | JavaScript/TypeScript security | ✅ |
+| graudit | Multi-language pattern matching | ✅ |
+| guarddog | Malicious package detection | ✅ |
+| shellcheck | Shell script security analysis | ✅ |
+| trivy | Container & filesystem scanning | ✅ |
+| template-analyzer | ARM/Bicep template scanning | ⬜ |
+
+> **Note**: The list above reflects the current system. Your available tools may differ. The CLI displays the actual discovery results at scan time.
+
 ## Development
 
 Since packages are installed in editable mode, changes to the code are immediately available:

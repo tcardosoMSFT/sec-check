@@ -129,6 +129,7 @@ Build a cross-platform security scanning application using GitHub Copilot SDK (h
 - `agentsec/core/agentsec/skills.py` — Implement `@tool` decorated functions for file scanning skills: `list_files`, `analyze_file`, `generate_report`
 - `agentsec/core/agentsec/config.py` — Configuration management with `AgentSecConfig` class for loading YAML config and CLI overrides
 - `agentsec/core/agentsec/progress.py` — Progress tracking with `ProgressTracker` class for real-time scan feedback
+- `agentsec/core/agentsec/skill_discovery.py` — Dynamic discovery of Copilot CLI agentic skills from `~/.copilot/skills/` (user) and `.copilot/skills/` (project), with tool availability checking
 - `agentsec/core/pyproject.toml` — Python package config with dependencies on `agent-framework-core==1.0.0b260107` and `pyyaml>=6.0`
 - `agentsec/core/README.md` — Agent architecture and skills development documentation
 
@@ -287,6 +288,13 @@ Build a cross-platform security scanning application using GitHub Copilot SDK (h
 - Native installers for Desktop: Windows (NSIS), macOS (DMG)
 - Separate packages allow targeted distribution
 
+**Dynamic Skill Discovery:**
+- Copilot CLI agentic skills are auto-discovered from two locations: `~/.copilot/skills/` (user-level) and `<project>/.copilot/skills/` (project-level)
+- Each skill directory contains a `SKILL.md` with YAML frontmatter (name, description)
+- Skills are mapped to their underlying CLI tools via `SKILL_TO_TOOL_MAP` with a fallback heuristic
+- Tool availability is verified at runtime using `shutil.which()` — no hardcoded tool lists
+- Both user-level and project-level skills are shown in the CLI with availability status
+
 **Cross-Platform Considerations:**
 - Python virtual environments work identically on Windows/macOS
 - Electron handles OS-specific windowing and installers
@@ -305,13 +313,14 @@ Build a cross-platform security scanning application using GitHub Copilot SDK (h
 - ✅ Customizable system message and initial prompt
 - ✅ External prompt file support
 - ✅ **Progress tracking system** — Real-time feedback on files being scanned
+- ✅ **Dynamic skill discovery** — Automatically discovers Copilot CLI agentic skills from `~/.copilot/skills/` (user-level) and `<project>/.copilot/skills/` (project-level), maps each skill to its underlying CLI tool (bandit, trivy, checkov, etc.), and checks tool availability on the system
 - ✅ Next.js GUI with folder selection and results display
 - ✅ Electron wrapper with FastAPI subprocess management
 - ✅ Basic documentation (README files, .env.example, agentsec.example.yaml)
 - ✅ Development tooling (VS Code launch configs)
 
 **Excluded (Future Enhancements):**
-- ❌ Real security scanners (bandit, semgrep, eslint-security, hadolint)
+- ❌ Direct invocation of real security scanners (bandit, trivy, etc.) — skills are discovered and reported, but not yet executed by the agent
 - ❌ Workflow orchestration for parallel scanning across file types
 - ❌ SQLite persistence for scan history
 - ❌ Telemetry/tracing with Application Insights

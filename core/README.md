@@ -13,6 +13,7 @@ pip install -e ./core
 - `agentsec/agent.py` — `SecurityScannerAgent` class (main entry point)
 - `agentsec/config.py` — `AgentSecConfig` class for configuration management
 - `agentsec/progress.py` — `ProgressTracker` class for real-time scan feedback
+- `agentsec/skill_discovery.py` — Dynamic discovery of Copilot CLI agentic skills and tool availability checking
 - `agentsec/skills.py` — `@tool` skill functions (list_files, analyze_file, generate_report)
 - `tests/` — Unit and integration tests
 
@@ -121,3 +122,56 @@ set_global_tracker(None)
 | `SCAN_FINISHED` | Scan complete with final summary |
 | `WARNING` | Non-fatal issue during scan |
 | `ERROR` | Serious problem during scan |
+
+## Skill Discovery
+
+The `skill_discovery` module dynamically discovers Copilot CLI agentic skills from the same directories the Copilot CLI uses:
+
+- **User-level**: `~/.copilot/skills/`
+- **Project-level**: `<project_root>/.copilot/skills/`
+
+Each skill directory contains a `SKILL.md` file with YAML frontmatter. The module parses these, maps each skill to its underlying CLI tool, and checks whether the tool is installed.
+
+### Basic Usage
+
+```python
+from agentsec.skill_discovery import discover_all_skills, get_skill_summary
+
+# Discover all skills (user + project level)
+skills = discover_all_skills("/path/to/project")
+
+# Print each skill with availability
+for skill in skills:
+    mark = "✅" if skill["tool_available"] else "⬜"
+    print(f"  {mark} {skill['tool_name']:<20} — {skill['description']}")
+
+# Get summary statistics
+summary = get_skill_summary(skills)
+print(f"Available: {summary['available']}/{summary['total']}")
+```
+
+### Skill Dictionary Keys
+
+Each skill returned by `discover_all_skills()` is a dictionary with:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `name` | str | Skill name from SKILL.md frontmatter |
+| `description` | str | Short description of the skill |
+| `tool_name` | str | Underlying CLI tool binary name |
+| `tool_available` | bool | Whether the tool is found on PATH |
+| `tool_path` | str or None | Full path to the tool binary |
+| `source` | str | `"user"` or `"project"` |
+| `skill_dir` | str | Absolute path to the skill directory |
+
+### Summary Dictionary Keys
+
+`get_skill_summary()` returns:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `total` | int | Total skills discovered |
+| `available` | int | Skills with installed tools |
+| `unavailable` | int | Skills with missing tools |
+| `user_count` | int | User-level skills |
+| `project_count` | int | Project-level skills |

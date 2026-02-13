@@ -61,6 +61,30 @@ When scanning, you'll see real-time progress:
 ✅ Scan complete: 15 files scanned, 5 issues found (23s)
 ```
 
+### Skill & Tool Discovery
+
+Before each scan, the CLI dynamically discovers available Copilot CLI agentic skills and checks whether their underlying tools are installed on your system. This replaces any hardcoded tool list and adapts automatically to your environment.
+
+```
+📋 Available scanning skills:
+  Built-in skills (registered @tool functions):
+    • list_files       — Discover files in target directory
+    • analyze_file     — Analyze a file for security vulnerabilities
+    • generate_report  — Generate a formatted vulnerability report
+  Copilot CLI agentic skills (8/9 tools available):
+    📂 ~/.copilot/skills/ (9 skills)
+    ✅ bandit               — Security audit of Python source code...
+    ✅ checkov              — Scan IaC for security misconfigurations...
+    ✅ eslint               — Security analysis of JavaScript/TypeScript code...
+    ⬜ template-analyzer    — Scan ARM/Bicep templates... (not installed)
+```
+
+Skills are discovered from two locations:
+- **User-level**: `~/.copilot/skills/` — available for all projects
+- **Project-level**: `<project>/.copilot/skills/` — only for the current project
+
+Each skill directory must contain a `SKILL.md` file with YAML frontmatter (name, description). The CLI maps each skill to its underlying CLI tool and verifies availability using the system PATH.
+
 Features:
 - Visual progress bar with percentage
 - Current file being scanned
