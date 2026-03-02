@@ -129,10 +129,17 @@ Example parallel progress output:
 
 ### Reliability Features
 
-- **Stall detection**: Monitors tool activity every 5 seconds; sends nudge messages if the LLM's tool calls stall for 30+ seconds
-- **Configurable timeout**: Default 300s scan timeout; partial results returned on timeout instead of discarding all work
-- **Safety guardrails**: System message prevents execution of scanned code, blocks dangerous commands, and defends against prompt injection
-- **Per-sub-agent isolation** (parallel mode): Each sub-agent runs in its own session; failures in one scanner don't affect others
+- **Activity-based stall detection**: The shared `session_runner.py` monitors SDK events continuously; nudges are sent after 120s of inactivity; after 3 unresponsive nudges the session is aborted
+- **Transient error retry**: Rate limits (429), 5xx, and other transient session errors are automatically retried with exponential backoff (5s, 15s, 45s) via `run_session_with_retries()`. Each retry uses a fresh session created by a session factory.
+- **Configurable timeout**: Default 1800s safety ceiling; activity-based detection handles the normal case; partial results returned on timeout
+- **Safety guardrails**: System message (using `mode: "append"` to preserve SDK defaults) prevents execution of scanned code, blocks dangerous commands, and defends against prompt injection
+- **Dynamic system message**: Available scanner skills are discovered at runtime and injected into the system message — no hardcoded scanner lists that can become stale
+- **Per-sub-agent isolation** (parallel mode): Each sub-agent runs in its own session via a session factory; failures in one scanner don't affect others
+- **Connectivity check**: `client.ping()` verifies Copilot CLI server health before scanning
+- **Stale session cleanup**: On initialization, orphaned `agentsec-*` sessions from previous runs are automatically deleted
+- **Proper resource cleanup**: Session factories with `finally`-block cleanup ensure no session leaks; `force_stop()` fallback if `client.stop()` hangs; `sys.exit()` used instead of `os._exit()` for clean shutdown
+- **Context-scoped progress tracking**: Uses `contextvars.ContextVar` for safe concurrent usage in multi-scan scenarios
+- **Consolidated scanner registry**: `SCANNER_REGISTRY` in `skill_discovery.py` is the single source of truth — adding a new scanner requires editing one dict entry
 
 ## Progress Tracking
 
@@ -178,6 +185,8 @@ See [agentsec.example.yaml](agentsec.example.yaml) for a full example with comme
 | `--parallel` | | Run scanners concurrently as sub-agents |
 | `--max-concurrent N` | | Max parallel scanners (default 3, requires `--parallel`) |
 | `--verbose` | `-v` | Enable debug logging |
+| `--timeout SECONDS` | | Safety ceiling timeout (default 1800) |
+| `--model MODEL` | `-m` | Override LLM model (default gpt-5) |
 
 ## Documentation
 
@@ -194,9 +203,9 @@ AgentSec uses the GitHub Copilot SDK to create an AI agent that leverages **Copi
 2. **`skill`** — Invokes pre-configured Copilot CLI agentic skills for structured scanning (bandit-security-scan, graudit-security-scan, etc.)
 3. **`view`** — Reads file contents for manual LLM code inspection
 
-The agent also has fallback `@tool` skills (`list_files`, `analyze_file`, `generate_report`) defined in `core/agentsec/skills.py` for basic pattern-matching analysis.
+The agent also has fallback `@tool` skills (`list_files`, `analyze_file`, `generate_report`) defined in `core/agentsec/skills.py`, but these are **legacy MVP code** that are not registered with any SDK session. Primary scanning uses the Copilot CLI built-in tools.
 
-A **directive system message** guides the LLM through a structured scanning workflow with safety guardrails. **Stall detection** monitors tool activity and sends nudge messages if the LLM becomes inactive.
+A **directive system message** (using `mode: "append"` to preserve SDK guardrails) guides the LLM through a structured scanning workflow with safety guardrails. **Activity-based stall detection** in the shared `session_runner.py` module monitors SDK events and sends context-aware nudge messages if the LLM becomes inactive.
 
 The agent is implemented in [core/agentsec/agent.py](core/agentsec/agent.py) and shared by both the CLI and Desktop app.
 

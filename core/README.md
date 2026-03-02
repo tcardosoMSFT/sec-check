@@ -10,12 +10,15 @@ pip install -e ./core
 
 ## Package Structure
 
-- `agentsec/agent.py` — `SecurityScannerAgent` class (main entry point, stall detection, nudge system)
-- `agentsec/config.py` — `AgentSecConfig` class with directive system message and safety guardrails
+- `agentsec/agent.py` — `SecurityScannerAgent` class (per-scan session factory, dynamic system messages, skip guidance)
+- `agentsec/config.py` — `AgentSecConfig` class with system message template (scanner list generated dynamically at runtime), model selection, and safety guardrails
 - `agentsec/orchestrator.py` — `ParallelScanOrchestrator` class for concurrent sub-agent scanning
-- `agentsec/progress.py` — `ProgressTracker` class for real-time scan feedback
-- `agentsec/skill_discovery.py` — Dynamic discovery of Copilot CLI agentic skills and tool availability checking
-- `agentsec/skills.py` — `@tool` skill functions (list_files, analyze_file, generate_report)
+- `agentsec/session_runner.py` — Shared `run_session_to_completion()` + `run_session_with_retries()` — activity-based waiting, nudges, tool health, transient-error retry with session factory
+- `agentsec/session_logger.py` — Per-session file logging for debugging
+- `agentsec/progress.py` — `ProgressTracker` class (uses `contextvars.ContextVar` for safe concurrent usage)
+- `agentsec/skill_discovery.py` — `SCANNER_REGISTRY` (single source of truth), `classify_files()`, `is_scanner_relevant()`, `FOLDERS_TO_SKIP`, `get_skill_directories()`, dynamic skill discovery with 30s TTL cache
+- `agentsec/tool_health.py` — `ToolHealthMonitor` class for stuck-tool detection, error patterns, and retry loops
+- `agentsec/skills.py` — Legacy `@tool` skill functions (list_files, analyze_file, generate_report) — **not registered with any session**
 - `tests/` — Unit and integration tests
 
 ## How Scanning Works
@@ -30,22 +33,25 @@ The agent uses **Copilot CLI built-in tools** as its primary scanning mechanism:
 
 A **directive system message** in `config.py` guides the LLM through a structured scanning workflow with comprehensive safety guardrails.
 
-### Stall Detection & Nudge System
+### Stall Detection & Activity-Based Waiting
 
-The `scan()` method monitors tool activity and prevents the LLM from getting stuck:
+The shared `run_session_to_completion()` in `session_runner.py` handles all wait logic for both `agent.py` and `orchestrator.py`.  `run_session_with_retries()` wraps it with automatic retry for transient errors (rate limits, 5xx) using exponential backoff and a session factory for fresh sessions on each attempt:
 
 | Constant | Default | Purpose |
-|----------|---------|---------|
-| `DEFAULT_SCAN_TIMEOUT_SECONDS` | 300s | Maximum wall-clock time for a scan |
-| `STALL_DETECTION_SECONDS` | 30s | Inactivity threshold before sending a nudge |
-| `SCANNING_TOOL_NAMES` | `{"skill"}` | Tool names that count as security scanning activity |
-| `MAX_NUDGES` | 2 | Maximum nudge messages per scan |
+|----------|---------|---------|   
+| `DEFAULT_INACTIVITY_TIMEOUT` | 120s | Seconds of no SDK events before sending a nudge |
+| `DEFAULT_MAX_IDLE_NUDGES` | 3 | Consecutive unresponsive nudges before aborting |
+| `DEFAULT_SAFETY_TIMEOUT` | 1800s | Absolute safety ceiling (rarely hit) |
+| `MAX_TRANSIENT_RETRIES` | 3 | Automatic retries for transient errors |
+| `TRANSIENT_RETRY_BASE_DELAY` | 5s | Base delay for exponential backoff (5s, 15s, 45s) |
 
-If no tool activity occurs for 30 seconds, a nudge message is sent. Two types of nudges:
-1. **Redirect nudge** — if the LLM hasn't invoked any security scanners yet
-2. **Progress nudge** — if the LLM ran scanners but seems stuck
+The approach is **activity-based**: as long as SDK events keep arriving (tool calls, messages, reasoning), the session is alive and we keep waiting. Only when all activity stops does the nudge/abort mechanism activate.
 
-Partial results are captured and returned on timeout instead of discarding all work.
+Additional features:
+- **Tool health monitoring**: Detects stuck tools, error output patterns, and retry loops via `ToolHealthMonitor`
+- **Event handler cleanup**: All `session.on()` calls capture and invoke unsubscribe functions
+- **Custom hooks**: `on_tool_start` and `on_tool_complete` callbacks for scan-specific behaviour (e.g., scanner invocation tracking, progress updates)
+- **Callable nudge messages**: Nudge text can be a function for context-aware messages
 
 ## Configuration
 
@@ -71,12 +77,13 @@ config = config.with_overrides(
 
 ### Configuration Options
 
-| Setting | Description |
-|---------|-------------|
-| `system_message` | The AI's system prompt (who it is, what it does) |
-| `system_message_file` | Path to file containing system message |
-| `initial_prompt` | Prompt template for scans (use `{folder_path}` placeholder) |
-| `initial_prompt_file` | Path to file containing initial prompt |
+| Setting | YAML Key | Description |
+|---------|----------|-------------|
+| `system_message` | `system_message` | The AI's system prompt (who it is, what it does) |
+| `system_message_file` | `system_message_file` | Path to file containing system message |
+| `initial_prompt` | `initial_prompt` | Prompt template for scans (use `{folder_path}` placeholder) |
+| `initial_prompt_file` | `initial_prompt_file` | Path to file containing initial prompt |
+| `model` | `model` | LLM model name (default: `gpt-5`) |
 
 ### Config File Search Paths
 
@@ -201,7 +208,17 @@ set_global_tracker(None)
 
 ## Skill Discovery
 
-The `skill_discovery` module dynamically discovers Copilot CLI agentic skills from the same directories the Copilot CLI uses:
+The `skill_discovery` module is the **single source of truth** for all scanner-related data. It provides:
+
+- **`SCANNER_REGISTRY`** — consolidated dict mapping each skill name to its CLI tool, file-type relevance, and description. Adding a new scanner requires editing one entry here; all derived data updates automatically.
+- **`SKILL_TO_TOOL_MAP`**, **`SCANNER_RELEVANCE`**, **`KNOWN_SCANNER_COMMANDS`** — derived views for backward compatibility
+- **`classify_files()`** — walks a folder and classifies files by extension/name (shared by both agent and orchestrator)
+- **`is_scanner_relevant()`** — checks whether a scanner is relevant for the discovered file types
+- **`FOLDERS_TO_SKIP`** — common non-source directories to exclude from scanning
+- **`discover_all_skills()`** — discovers Copilot CLI agentic skills from user and project directories (with 30s TTL cache)
+- **`get_skill_directories()`** — returns skill directory paths for `SessionConfig`
+
+The module discovers skills from the same directories the Copilot CLI uses:
 
 - **User-level**: `~/.copilot/skills/`
 - **Project-level**: `<project_root>/.copilot/skills/`
@@ -211,7 +228,7 @@ Each skill directory contains a `SKILL.md` file with YAML frontmatter. The modul
 ### Basic Usage
 
 ```python
-from agentsec.skill_discovery import discover_all_skills, get_skill_summary
+from agentsec.skill_discovery import discover_all_skills, get_skill_summary, get_skill_directories
 
 # Discover all skills (user + project level)
 skills = discover_all_skills("/path/to/project")
@@ -224,6 +241,10 @@ for skill in skills:
 # Get summary statistics
 summary = get_skill_summary(skills)
 print(f"Available: {summary['available']}/{summary['total']}")
+
+# Get directory paths for SDK SessionConfig
+skill_dirs = get_skill_directories("/path/to/project")
+# Pass to SessionConfig(skill_directories=skill_dirs)
 ```
 
 ### Skill Dictionary Keys

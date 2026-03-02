@@ -11,6 +11,11 @@ Build a cross-platform security scanning application using GitHub Copilot SDK (h
 
 **Communication Flow**: CLI directly invokes agent → GUI calls FastAPI server → FastAPI invokes same agent → Results stream back via SSE
 
+**Key Architectural Modules** (added via optimizations):
+- `session_runner.py` — Shared session-wait logic used by both single-scan and parallel orchestrator (eliminates ~400 lines of code duplication)
+- `skill_discovery.py` — Dynamic discovery of Copilot CLI agentic skills + `get_skill_directories()` for SDK-native skill loading
+- `tool_health.py` — Shared tool health monitoring, stuck-tool detection, and error pattern matching
+
 ---
 
 ## Implementation Phases
@@ -134,10 +139,14 @@ Build a cross-platform security scanning application using GitHub Copilot SDK (h
 **Core Agent Package:**
 
 - `agentsec/core/agentsec/agent.py` — Define `SecurityScannerAgent` using `Agent()` class with system instructions and tool registration
-- `agentsec/core/agentsec/skills.py` — Implement `@tool` decorated functions for file scanning skills: `list_files`, `analyze_file`, `generate_report`
-- `agentsec/core/agentsec/config.py` — Configuration management with `AgentSecConfig` class for loading YAML config and CLI overrides
-- `agentsec/core/agentsec/progress.py` — Progress tracking with `ProgressTracker` class for real-time scan feedback
-- `agentsec/core/agentsec/skill_discovery.py` — Dynamic discovery of Copilot CLI agentic skills from `~/.copilot/skills/` (user) and `.copilot/skills/` (project), with tool availability checking
+- `agentsec/core/agentsec/skills.py` — Legacy `@tool` decorated functions for file scanning skills (not registered with sessions): `list_files`, `analyze_file`, `generate_report`
+- `agentsec/core/agentsec/config.py` — Configuration management with `AgentSecConfig` class for loading YAML config, CLI overrides, and model selection
+- `agentsec/core/agentsec/session_runner.py` — Shared `run_session_to_completion()` with activity-based waiting, nudge mechanism, tool health monitoring
+- `agentsec/core/agentsec/session_logger.py` — Per-session file logging for debugging tool I/O
+- `agentsec/core/agentsec/tool_health.py` — `ToolHealthMonitor` for stuck-tool detection, error patterns, retry loop detection
+- `agentsec/core/agentsec/orchestrator.py` — `ParallelScanOrchestrator` for concurrent sub-agent scanning
+- `agentsec/core/agentsec/progress.py` — Progress tracking with `ProgressTracker` class (uses `contextvars.ContextVar` for concurrency safety)
+- `agentsec/core/agentsec/skill_discovery.py` — Dynamic discovery of Copilot CLI agentic skills from `~/.copilot/skills/` (user) and `.copilot/skills/` (project), with `get_skill_directories()` for SDK-native skill loading
 - `agentsec/core/pyproject.toml` — Python package config with dependencies on `agent-framework-core==1.0.0b260107` and `pyyaml>=6.0`
 - `agentsec/core/README.md` — Agent architecture and skills development documentation
 
@@ -304,22 +313,29 @@ Build a cross-platform security scanning application using GitHub Copilot SDK (h
 - `bash` runs file discovery commands and can invoke security scanner CLIs directly (bandit, graudit, etc.)
 - `skill` invokes pre-configured Copilot CLI agentic skills for structured security scanning
 - `view` reads file contents for manual code inspection by the LLM
-- A highly directive system message guides the LLM through a structured scanning workflow
+- A highly directive system message (using `mode: "append"` to preserve SDK guardrails) guides the LLM through a structured scanning workflow
 - Safety guardrails in the system message prevent the LLM from executing scanned code or following prompt injection attempts
+- Sessions pass `skill_directories` via `get_skill_directories()` to `SessionConfig` for SDK-native skill loading
+- Model name is configurable via `config.model` (YAML key: `model:`, default: `gpt-5`)
 
 **Stall Detection & Nudge System:**
-- The `scan()` method polls every 5 seconds instead of using a single blocking wait
-- If no tool activity occurs for 30 seconds (configurable via `STALL_DETECTION_SECONDS`), a nudge message is sent
-- Two types of nudges: redirect nudge (if no security scanners invoked yet) and progress nudge (if stuck after scanning)
-- Maximum 2 nudges per scan to avoid spamming the LLM
+- The shared `run_session_to_completion()` in `session_runner.py` handles all activity-based waiting, nudge logic, and tool health monitoring for both single-scan and parallel sub-agent sessions
+- Activity-based approach: as long as SDK events keep arriving, the session is alive — no arbitrary time limits
+- If no activity for 120 seconds (`INACTIVITY_TIMEOUT_SECONDS`), a nudge message is sent
+- After 3 consecutive unresponsive nudges (`MAX_CONSECUTIVE_IDLE_NUDGES`), the session is aborted
+- Scan-specific nudges are context-aware: redirect nudge (if no security scanners invoked yet) vs. progress nudge (if stuck after scanning)
 - Partial results are captured and returned on timeout instead of discarding all work
+- Tool health monitoring detects stuck tools, retry loops, and excessive error accumulation
+- Event handler unsubscribe functions are always captured and called on completion (proper resource cleanup)
 
-**Dynamic Skill Discovery:**
+**Dynamic Skill Discovery & SDK-Native Skill Loading:**
 - Copilot CLI agentic skills are auto-discovered from two locations: `~/.copilot/skills/` (user-level) and `<project>/.copilot/skills/` (project-level)
 - Each skill directory contains a `SKILL.md` with YAML frontmatter (name, description)
 - Skills are mapped to their underlying CLI tools via `SKILL_TO_TOOL_MAP` with a fallback heuristic
 - Tool availability is verified at runtime using `shutil.which()` — no hardcoded tool lists
 - Both user-level and project-level skills are shown in the CLI with availability status
+- `get_skill_directories()` returns discovered skill directory paths for use with the SDK's native `skill_directories` parameter in `SessionConfig`, ensuring skills are reliably loaded by the Copilot CLI
+- Sessions pass `skill_directories` to `SessionConfig` so the SDK natively discovers and loads skills
 
 **Cross-Platform Considerations:**
 - Python virtual environments work identically on Windows/macOS
@@ -333,12 +349,19 @@ Build a cross-platform security scanning application using GitHub Copilot SDK (h
 
 **Included in MVP:**
 - ✅ Monorepo setup with core, CLI, and desktop packages
-- ✅ Agent with built-in skills (list_files, analyze_file, generate_report)
+- ✅ Agent with built-in skills (list_files, analyze_file, generate_report) — **note**: these `@tool` skills are legacy; primary scanning uses Copilot CLI built-in tools
 - ✅ **Real security scanning** via Copilot CLI built-in tools (bash, skill, view) — invokes real security scanners (bandit, graudit, trivy, etc.) via the `skill` tool and `bash`
 - ✅ **Directive prompt engineering** — System message explicitly lists available tools, scanning workflows, and safety guardrails to guide the LLM
-- ✅ **Stall detection & nudge system** — Monitors tool activity every 5s; sends nudge messages (max 2) if the LLM is inactive for 30s
-- ✅ **Configurable scan timeout** — Default 300s, caller-overridable; partial results returned on timeout instead of just an error
+- ✅ **Activity-based stall detection** — Shared `session_runner.py` monitors SDK events; nudges after 120s inactivity; aborts after 3 unresponsive nudges
+- ✅ **Configurable scan timeout** — Default 1800s safety ceiling (activity-based detection handles normal cases); partial results returned on timeout
 - ✅ **Safety guardrails** — System message prevents execution of scanned code, blocks dangerous commands, and defends against prompt injection from analyzed code
+- ✅ **Shared session runner** — `session_runner.py` provides `run_session_to_completion()` used by both single-scan and parallel orchestrator, eliminating ~400 lines of duplicate wait-loop code
+- ✅ **SDK-native skill loading** — `skill_directories` passed to `SessionConfig` so Copilot CLI natively discovers agentic skills
+- ✅ **Explicit system_message mode** — All sessions use `mode: "append"` to preserve SDK built-in guardrails
+- ✅ **Configurable model** — `model` field in `AgentSecConfig` (YAML key: `model:`) replaces hardcoded `gpt-5`
+- ✅ **Context-scoped progress tracking** — Uses `contextvars.ContextVar` instead of global variable for safe concurrent usage
+- ✅ **Proper event handler cleanup** — All `session.on()` calls capture and invoke unsubscribe functions
+- ✅ **Connectivity verification** — `client.ping()` called after `client.start()` for early error detection
 - ✅ CLI interface with argparse and stdout streaming
 - ✅ Configuration system (YAML config file + CLI overrides)
 - ✅ Customizable system message and initial prompt
@@ -351,7 +374,7 @@ Build a cross-platform security scanning application using GitHub Copilot SDK (h
 - ✅ Development tooling (VS Code launch configs)
 
 **Excluded (Future Enhancements):**
-- ❌ Workflow orchestration for parallel scanning across file types
+- ~~❌ Workflow orchestration for parallel scanning across file types~~ → ✅ **IMPLEMENTED** via `ParallelScanOrchestrator`
 - ❌ SQLite persistence for scan history
 - ❌ Telemetry/tracing with Application Insights
 - ❌ Approval workflows UI for critical operations

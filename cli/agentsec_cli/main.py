@@ -177,6 +177,19 @@ def create_progress_display():
             print(f"  📊 {event.message}")
             print()
 
+        elif event.type == ProgressEventType.LLM_ANALYSIS_STARTED:
+            print(f"\n  🧠 {event.message}")
+
+        elif event.type == ProgressEventType.LLM_ANALYSIS_FINISHED:
+            # Choose icon based on outcome
+            if "clean" in event.message:
+                icon = "✅"
+            elif "error" in event.message or "timeout" in event.message:
+                icon = "❌"
+            else:
+                icon = "🧠"
+            print(f"  {icon} {event.message}")
+
     return display_progress
 
 
@@ -211,6 +224,95 @@ def create_progress_bar(percent: float, width: int = 20) -> str:
     bar = filled_char * filled + empty_char * empty
 
     return f"[{bar}] {percent:3.0f}%"
+
+
+def create_stuck_tool_handler():
+    """
+    Create an interactive handler for stuck tool situations.
+
+    Returns an async callback that is invoked when a tool in a sub-agent
+    (or the main agent session) appears stuck. The callback prints
+    information about the stuck tool and prompts the user to decide
+    whether to continue waiting or terminate the sub-agent.
+
+    The callback uses asyncio.run_in_executor to read user input without
+    blocking the event loop, so other sub-agents can continue running
+    while the user makes a decision.
+
+    Returns:
+        An async callback function compatible with OnToolStuckCallback.
+        Receives a StuckToolInfo, returns a StuckToolAction.
+    """
+    # Import StuckToolAction here to avoid import at module level
+    from agentsec.tool_health import StuckToolAction, StuckToolInfo
+
+    async def handle_stuck_tool(info: StuckToolInfo) -> StuckToolAction:
+        """
+        Interactive CLI prompt for stuck tool decisions.
+
+        Shows the user what tool is stuck, how long it has been running,
+        and in which sub-agent. Then asks the user to choose between
+        waiting longer or terminating the sub-agent.
+
+        Args:
+            info: A StuckToolInfo with details about the stuck tool.
+
+        Returns:
+            StuckToolAction.WAIT or StuckToolAction.TERMINATE based
+            on user's choice. Defaults to WAIT on invalid input.
+        """
+        minutes = int(info.elapsed_seconds // 60)
+        seconds = int(info.elapsed_seconds % 60)
+
+        # Print a clear, informative prompt
+        print()
+        print("  ╔══════════════════════════════════════════════════════════╗")
+        print("  ║  ⚠️  Tool appears stuck                                 ║")
+        print("  ╠══════════════════════════════════════════════════════════╣")
+        print(f"  ║  Sub-agent: {info.agent_label:<44}║")
+        print(f"  ║  Tool:      {info.tool_name:<44}║")
+
+        if info.detail:
+            # Truncate long detail for display
+            detail_display = info.detail
+            if len(detail_display) > 44:
+                detail_display = detail_display[:41] + "..."
+            print(f"  ║  Detail:    {detail_display:<44}║")
+
+        print(f"  ║  Running:   {minutes}m {seconds}s{'':<38}║")
+
+        if info.has_prior_errors:
+            print("  ║  ⚠ This tool has had errors before      "
+                  "               ║")
+
+        print("  ╠══════════════════════════════════════════════════════════╣")
+        print("  ║  [W] Wait longer   |   [T] Terminate this sub-agent    ║")
+        print("  ╚══════════════════════════════════════════════════════════╝")
+
+        # Read user input without blocking the event loop.
+        # We use run_in_executor so other async tasks (like other
+        # sub-agents) keep running while we wait for the user.
+        def _read_input() -> str:
+            """Blocking input read, run in executor."""
+            try:
+                return input("  Choice [W/t]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                # Non-interactive or user pressed Ctrl+C
+                return "w"
+
+        loop = asyncio.get_event_loop()
+        choice = await loop.run_in_executor(None, _read_input)
+
+        if choice in ("t", "terminate"):
+            print("  → Terminating sub-agent...")
+            print()
+            return StuckToolAction.TERMINATE
+        else:
+            print("  → Continuing to wait...")
+            print()
+            return StuckToolAction.WAIT
+
+    return handle_stuck_tool
 
 
 def print_available_skills(folder_path: Optional[str] = None) -> None:
@@ -276,25 +378,45 @@ def print_available_skills(folder_path: Optional[str] = None) -> None:
     print()
 
 
-def save_report(report_content: str, folder_path: Path) -> Optional[str]:
+def save_report(
+    report_content: str,
+    folder_path: Path,
+    log_dir: Optional[str] = None,
+) -> Optional[str]:
     """
-    Save the scan report to a Markdown file in the current directory.
+    Save the scan report to a Markdown file.
 
-    The report is saved with a timestamped filename like:
-    agentsec-report-20260213-143025.md
+    When a log_dir is provided the report is saved inside the same
+    timestamped run directory that contains the per-session logs,
+    keeping all artefacts for a single scan together.  If no log_dir
+    is given, the report is saved in the current working directory
+    (backward-compatible fallback).
+
+    The filename is always "agentsec-report.md" when saving into the
+    run log directory (the directory itself is already timestamped).
+    When saving to cwd, a timestamped filename is used instead so
+    multiple runs don't overwrite each other.
 
     Args:
         report_content: The full text of the scan report from the agent
         folder_path: The folder that was scanned (included in the header)
+        log_dir: Optional path to the run log directory.  When provided
+                 the report is written there as "agentsec-report.md".
 
     Returns:
         The absolute path to the saved report file, or None if saving failed
     """
     import datetime
 
-    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    report_filename = f"agentsec-report-{timestamp}.md"
-    report_path = Path.cwd() / report_filename
+    if log_dir:
+        # Save inside the run log directory alongside session logs
+        report_filename = "agentsec-report.md"
+        report_path = Path(log_dir) / report_filename
+    else:
+        # Fallback: save in cwd with a timestamped name
+        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        report_filename = f"agentsec-report-{timestamp}.md"
+        report_path = Path.cwd() / report_filename
 
     try:
         with open(report_path, "w", encoding="utf-8") as report_file:
@@ -441,6 +563,9 @@ async def run_scan(
     prompt_file: Optional[str] = None,
     parallel: bool = False,
     max_concurrent: int = 3,
+    timeout: Optional[int] = None,
+    model: Optional[str] = None,
+    no_llm_analysis: bool = False,
 ) -> int:
     """
     Execute a security scan on the given folder.
@@ -462,6 +587,7 @@ async def run_scan(
         prompt_file: Path to file containing initial prompt
         parallel: If True, use parallel sub-agent scanning mode
         max_concurrent: Maximum concurrent sub-agents (only for parallel mode)
+        timeout: Overall scan timeout in seconds (None uses agent default)
 
     Returns:
         Exit code: 0 for success, 1 for error, 2 for timeout
@@ -503,6 +629,8 @@ async def run_scan(
             system_message_file=system_message_file,
             initial_prompt=prompt,
             initial_prompt_file=prompt_file,
+            model=model,
+            enable_llm_analysis=False if no_llm_analysis else None,
         )
     except FileNotFoundError as error:
         print(f"Error: {error}", file=sys.stderr)
@@ -527,16 +655,29 @@ async def run_scan(
     )
     set_global_tracker(progress_tracker)
 
+    # Step 7: Set up the stuck-tool handler for interactive decision-making
+    # When a tool in a sub-agent (or the main session) appears stuck,
+    # this callback prompts the user to wait or terminate.
+    stuck_tool_handler = create_stuck_tool_handler()
+
+    # Step 7b: Create a timestamped log directory for this run.
+    # Each session (main-scan, sub-agents, synthesis) gets its own
+    # log file inside this directory.
+    from agentsec.session_logger import create_run_log_dir
+    log_base_dir = os.path.join(os.getcwd(), "agentsec-logs")
+    run_log_dir = create_run_log_dir(log_base_dir)
+    print(f"📝 Session logs: {run_log_dir}")
+
     try:
-        # Step 7: Initialize (connect to Copilot)
+        # Step 8: Initialize (connect to Copilot)
         print("Starting AgentSec security scanner...")
         await agent.initialize()
 
-        # Step 7b: Show available scanning skills and external tools
+        # Step 8b: Show available scanning skills and external tools
         # Pass the folder path so project-level skills can also be found
         print_available_skills(folder_path=str(folder_path))
 
-        # Step 8: Run the scan with progress tracking
+        # Step 9: Run the scan with progress tracking
         progress_tracker.start_scan(str(folder_path))
 
         if parallel:
@@ -544,13 +685,21 @@ async def run_scan(
             print(f"🔀 Parallel mode: up to {max_concurrent} concurrent scanners")
             result = await agent.scan_parallel(
                 str(folder_path),
+                timeout=float(timeout) if timeout else None,
                 max_concurrent=max_concurrent,
+                on_tool_stuck=stuck_tool_handler,
+                log_dir=run_log_dir,
             )
         else:
             # Serial mode: single LLM session (original behaviour)
-            result = await agent.scan(str(folder_path))
+            result = await agent.scan(
+                str(folder_path),
+                timeout=float(timeout) if timeout else None,
+                on_tool_stuck=stuck_tool_handler,
+                log_dir=run_log_dir,
+            )
 
-        # Step 8b: Update progress tracker with issue count from
+        # Step 9b: Update progress tracker with issue count from
         # the agent's response (but keep the file count from the tracker
         # since it accurately reflects what was actually scanned)
         if result["status"] == "success" and result.get("result"):
@@ -567,12 +716,14 @@ async def run_scan(
 
         progress_tracker.finish_scan()
 
-        # Step 9: Display results based on status
+        # Step 10: Display results based on status
         if result["status"] == "success":
             print(result["result"])
 
-            # Save the report to a file and show its location
-            report_path = save_report(result["result"], folder_path)
+            # Save the report inside the run log directory
+            report_path = save_report(
+                result["result"], folder_path, log_dir=run_log_dir,
+            )
             if report_path:
                 print(f"📄 Report saved to: {report_path}")
 
@@ -585,7 +736,9 @@ async def run_scan(
                 print(result["result"])
 
                 # Save partial results too — they may still be useful
-                report_path = save_report(result["result"], folder_path)
+                report_path = save_report(
+                    result["result"], folder_path, log_dir=run_log_dir,
+                )
                 if report_path:
                     print(f"📄 Partial report saved to: {report_path}")
             else:
@@ -612,7 +765,7 @@ async def run_scan(
         return 1
 
     finally:
-        # Step 10: Always clean up resources
+        # Step 11: Always clean up resources
         set_global_tracker(None)  # Clear the global tracker
         await agent.cleanup()
         
@@ -713,6 +866,28 @@ def main() -> None:
             "time (only used with --parallel).  Default is 3."
         ),
     )
+    scan_parser.add_argument(
+        "--no-llm-analysis",
+        action="store_true",
+        default=False,
+        help=(
+            "Disable the LLM deep analysis phase that runs after "
+            "deterministic scanners in parallel mode.  Use this for "
+            "faster scans when semantic threat review is not needed."
+        ),
+    )
+    scan_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "Safety ceiling timeout in seconds.  The scan uses "
+            "activity-based detection and normally finishes well "
+            "before this limit.  Default is 1800 (30 minutes).  "
+            "Only increase if scanning extremely large codebases."
+        ),
+    )
     
     # Configuration file option
     scan_parser.add_argument(
@@ -767,6 +942,18 @@ def main() -> None:
         ),
     )
 
+    # Model selection (F2)
+    scan_parser.add_argument(
+        "--model", "-m",
+        dest="model",
+        metavar="MODEL",
+        default=None,
+        help=(
+            "Override the LLM model name (e.g. gpt-5, claude-sonnet-4.5). "
+            "Takes priority over config file. Default is gpt-5."
+        ),
+    )
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -785,12 +972,19 @@ def main() -> None:
                 prompt_file=args.prompt_file,
                 parallel=args.parallel,
                 max_concurrent=args.max_concurrent,
+                timeout=args.timeout,
+                model=args.model,
+                no_llm_analysis=args.no_llm_analysis,
             )
         )
 
-        # Force exit the process to avoid hanging on background threads
-        # from the Copilot SDK subprocess or heartbeat timer
-        os._exit(exit_code)
+        # Use sys.exit instead of os._exit so that finally blocks,
+        # atexit handlers, and file flushes run properly (F17).
+        # The agent.cleanup() in run_scan's finally block already
+        # calls client.stop() which terminates the SDK subprocess.
+        # The heartbeat thread is a daemon thread, so it will be
+        # cleaned up automatically when the process exits.
+        sys.exit(exit_code)
     else:
         # No command given — show help
         parser.print_help()

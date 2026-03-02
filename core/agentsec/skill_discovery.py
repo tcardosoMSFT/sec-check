@@ -27,30 +27,210 @@ import logging
 import os
 import re
 import shutil
+import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 
 # Set up logging for this module
 logger = logging.getLogger(__name__)
 
 
-# Known mappings from skill directory names to their underlying CLI tool.
-# The key is the skill folder name; the value is the binary name to look for
-# in PATH via shutil.which(). This list covers common naming patterns.
-# If a skill is NOT in this map we try to derive the tool name automatically
-# from the first segment of the directory name (e.g. "bandit-security-scan"
-# becomes "bandit").
-SKILL_TO_TOOL_MAP = {
-    "bandit-security-scan": "bandit",
-    "checkov-security-scan": "checkov",
-    "dependency-check-security-scan": "dependency-check",
-    "eslint-security-scan": "eslint",
-    "graudit-security-scan": "graudit",
-    "guarddog-security-scan": "guarddog",
-    "shellcheck-security-scan": "shellcheck",
-    "template-analyzer-security-scan": "template-analyzer",
-    "trivy-security-scan": "trivy",
+# ── Consolidated scanner registry (E1) ───────────────────────────────
+# Single source of truth for all known scanning skills.  Each entry maps
+# a skill directory name to its underlying CLI tool, the file-type
+# relevance info (extensions / filenames), and a human-readable
+# description.  Both SKILL_TO_TOOL_MAP and SCANNER_RELEVANCE (previously
+# maintained separately in two files) are now derived from this registry.
+#
+# To add a new scanner, add ONE entry here.  Everything else
+# (tool mapping, relevance checks, system-message generation) updates
+# automatically.
+
+SCANNER_REGISTRY: dict = {
+    "bandit-security-scan": {
+        "tool": "bandit",
+        "extensions": {".py"},
+        "filenames": set(),
+        "description": "Python AST security analysis",
+    },
+    "eslint-security-scan": {
+        "tool": "eslint",
+        "extensions": {".js", ".jsx", ".ts", ".tsx"},
+        "filenames": set(),
+        "description": "JavaScript / TypeScript security analysis",
+    },
+    "shellcheck-security-scan": {
+        "tool": "shellcheck",
+        "extensions": {".sh", ".bash"},
+        "filenames": set(),
+        "description": "Shell script security analysis",
+    },
+    "graudit-security-scan": {
+        "tool": "graudit",
+        "extensions": None,   # always relevant (multi-language)
+        "filenames": None,
+        "description": "Pattern-based source code auditing (multi-language)",
+    },
+    "guarddog-security-scan": {
+        "tool": "guarddog",
+        "extensions": set(),
+        "filenames": {"requirements.txt", "package.json", "package-lock.json"},
+        "description": "Supply-chain / malicious package detection",
+    },
+    "trivy-security-scan": {
+        "tool": "trivy",
+        "extensions": None,   # always relevant (filesystem scanner)
+        "filenames": None,
+        "description": "Container, filesystem, and IaC scanning",
+    },
+    "checkov-security-scan": {
+        "tool": "checkov",
+        "extensions": {".tf", ".yaml", ".yml"},
+        "filenames": {"dockerfile"},
+        "description": "Infrastructure-as-Code security scanning",
+    },
+    "dependency-check-security-scan": {
+        "tool": "dependency-check",
+        "extensions": set(),
+        "filenames": {"requirements.txt", "package.json", "go.mod", "gemfile.lock", "pom.xml"},
+        "description": "Dependency CVE scanning",
+    },
+    "template-analyzer-security-scan": {
+        "tool": "template-analyzer",
+        "extensions": set(),
+        "filenames": set(),
+        "description": "ARM/Bicep template security scanning",
+    },
 }
+
+# Derived views for backward compatibility and convenience.
+# SKILL_TO_TOOL_MAP: skill directory name -> CLI binary name
+SKILL_TO_TOOL_MAP = {
+    name: info["tool"] for name, info in SCANNER_REGISTRY.items()
+}
+
+# SCANNER_RELEVANCE: skill name -> {extensions, filenames, description}
+# Used by orchestrator.classify_files / is_scanner_relevant.
+SCANNER_RELEVANCE = {
+    name: {
+        "extensions": info["extensions"],
+        "filenames": info["filenames"],
+        "description": info["description"],
+    }
+    for name, info in SCANNER_REGISTRY.items()
+}
+
+# H1: Set of known scanner command names derived from the registry.
+KNOWN_SCANNER_COMMANDS = frozenset(SKILL_TO_TOOL_MAP.values())
+
+
+# ── Folders to skip during file discovery ───────────────────────────
+# Common non-source directories that should not be scanned.
+FOLDERS_TO_SKIP: Set[str] = {
+    ".git",
+    "__pycache__",
+    "node_modules",
+    ".next",
+    "venv",
+    ".venv",
+    "dist",
+    "build",
+}
+
+
+# ── File classification functions (B1) ────────────────────────────
+# These live in skill_discovery so both agent.py and orchestrator.py
+# can import them without either depending on the other.
+
+def classify_files(
+    folder_path: str,
+) -> Tuple[Dict[str, int], Set[str], int]:
+    """
+    Walk the target folder and classify files by extension and name.
+
+    Skips common non-source directories (node_modules, .git, etc.)
+    so the classification reflects actual source code.
+
+    This is used by both the orchestrator's scan plan and the agent's
+    skip-guidance builder.
+
+    Args:
+        folder_path: Directory to walk.
+
+    Returns:
+        A 3-tuple of:
+        - file_extensions: dict mapping extension (e.g. ".py") to count
+        - file_names: set of lowercased filenames found
+        - total_files: total number of files
+    """
+    extension_counts: Dict[str, int] = {}
+    filename_set: Set[str] = set()
+    total = 0
+
+    for current_dir, subdirs, filenames in os.walk(folder_path):
+        subdirs[:] = [d for d in subdirs if d not in FOLDERS_TO_SKIP]
+
+        for filename in filenames:
+            total += 1
+            extension = os.path.splitext(filename)[1].lower()
+            if extension:
+                extension_counts[extension] = (
+                    extension_counts.get(extension, 0) + 1
+                )
+            filename_set.add(filename.lower())
+
+    return extension_counts, filename_set, total
+
+
+def is_scanner_relevant(
+    relevance_info: dict,
+    file_extensions: Dict[str, int],
+    file_names: Set[str],
+) -> bool:
+    """
+    Check whether a scanner is relevant for the discovered files.
+
+    A scanner is relevant if:
+    - Its extensions/filenames fields are None (always relevant), or
+    - At least one target extension exists in the folder, or
+    - At least one target filename exists in the folder.
+
+    Args:
+        relevance_info: Entry from SCANNER_RELEVANCE dict.
+        file_extensions: Extensions found in the folder.
+        file_names:      Filenames found in the folder (lowercased).
+
+    Returns:
+        True if the scanner should be included in the scan plan.
+    """
+    target_extensions = relevance_info.get("extensions")
+    target_filenames = relevance_info.get("filenames")
+
+    if target_extensions is None or target_filenames is None:
+        return True
+
+    if target_extensions:
+        for ext in target_extensions:
+            if ext in file_extensions:
+                return True
+
+    if target_filenames:
+        for target_name in target_filenames:
+            if target_name.lower() in file_names:
+                return True
+
+    return False
+
+
+# ── Skill discovery cache (E2) ───────────────────────────────────────
+# discover_all_skills() and get_skill_directories() are called multiple
+# times during a single scan (CLI display, agent initialise, each
+# sub-agent in parallel mode).  Since skill directories don't change
+# mid-scan, we cache results with a short TTL to avoid redundant
+# filesystem walks and shutil.which() calls.
+_CACHE_TTL_SECONDS = 30.0
+_skills_cache: dict = {"result": None, "key": None, "time": 0.0}
+_dirs_cache: dict = {"result": None, "key": None, "time": 0.0}
 
 
 def _get_user_skills_dir() -> Path:
@@ -309,6 +489,15 @@ def discover_all_skills(project_root: Optional[str] = None) -> List[dict]:
         ...     mark = "✅" if skill["tool_available"] else "⬜"
         ...     print(f"  {mark} {skill['tool_name']:<20} — {skill['description']}")
     """
+    # E2: Check cache before doing expensive filesystem work
+    cache_key = project_root or "__none__"
+    if (
+        _skills_cache["key"] == cache_key
+        and _skills_cache["result"] is not None
+        and (time.time() - _skills_cache["time"]) < _CACHE_TTL_SECONDS
+    ):
+        return _skills_cache["result"]
+
     all_skills = []
 
     # Step 1: Discover user-level skills from ~/.copilot/skills/
@@ -335,7 +524,65 @@ def discover_all_skills(project_root: Optional[str] = None) -> List[dict]:
     # Sort by name for consistent display
     all_skills.sort(key=lambda skill: skill["name"])
 
+    # E2: Store in cache
+    _skills_cache["result"] = all_skills
+    _skills_cache["key"] = cache_key
+    _skills_cache["time"] = time.time()
+
     return all_skills
+
+
+def get_skill_directories(project_root: Optional[str] = None) -> List[str]:
+    """
+    Return the list of skill directory paths to pass to SessionConfig.
+
+    The Copilot SDK's ``skill_directories`` parameter tells the CLI
+    where to find agentic skills.  This function returns the standard
+    locations that exist on disk so they can be passed directly to
+    ``SessionConfig(skill_directories=[...])``.
+
+    Args:
+        project_root: Path to the project root directory.
+                      If None, only user-level paths are returned.
+
+    Returns:
+        A list of absolute directory paths that exist on disk.
+        May be empty if no skill directories are found.
+
+    Example:
+        >>> dirs = get_skill_directories("/home/user/my-project")
+        >>> session = await client.create_session(SessionConfig(
+        ...     skill_directories=dirs,
+        ... ))
+    """
+    # E2: Check cache before doing filesystem checks
+    cache_key = project_root or "__none__"
+    if (
+        _dirs_cache["key"] == cache_key
+        and _dirs_cache["result"] is not None
+        and (time.time() - _dirs_cache["time"]) < _CACHE_TTL_SECONDS
+    ):
+        return _dirs_cache["result"]
+
+    directories: List[str] = []
+
+    # User-level skills: ~/.copilot/skills/
+    user_dir = _get_user_skills_dir()
+    if user_dir.is_dir():
+        directories.append(str(user_dir))
+
+    # Project-level skills: <project_root>/.copilot/skills/
+    if project_root is not None:
+        project_dir = _get_project_skills_dir(project_root)
+        if project_dir.is_dir():
+            directories.append(str(project_dir))
+
+    # E2: Store in cache
+    _dirs_cache["result"] = directories
+    _dirs_cache["key"] = cache_key
+    _dirs_cache["time"] = time.time()
+
+    return directories
 
 
 def get_skill_summary(skills: List[dict]) -> dict:

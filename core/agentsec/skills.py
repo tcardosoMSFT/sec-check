@@ -1,6 +1,21 @@
 """
 Skills (tools) for the SecurityScannerAgent.
 
+.. deprecated::
+    These skills are LEGACY code from the early MVP prototype.
+    The agent now uses Copilot CLI built-in tools (bash, skill, view)
+    instead of these @tool-decorated functions. None of these skills
+    are registered with any SDK session — they are dead code.
+
+    The agent's actual scanning is driven by the system message in
+    config.py which instructs the LLM to use the Copilot CLI's
+    built-in ``skill`` tool to invoke agentic skills (bandit, graudit,
+    etc.) and ``bash`` to run scanners directly.
+
+    These functions are kept for reference and potential future use
+    if custom SDK tools are needed. To use them, register them via
+    the SDK's ``define_tool`` + ``tools`` parameter in SessionConfig.
+
 Each skill is an async function decorated with @tool.
 Skills are the building blocks the agent calls to scan code.
 """

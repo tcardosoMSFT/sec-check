@@ -631,20 +631,23 @@ assert report["high_count"] == 1
 - Agent accepts optional `AgentSecConfig` parameter for customization
 - Uses system_message and initial_prompt from configuration
 - Agent uses **Copilot CLI built-in tools** (`bash`, `skill`, `view`) as its primary scanning mechanism
-- `scan()` accepts optional `timeout` parameter (defaults to `DEFAULT_SCAN_TIMEOUT_SECONDS = 300.0`)
-- **Stall detection**: Polls every 5 seconds; if no tool activity for 30 seconds (`STALL_DETECTION_SECONDS`), sends a nudge message to redirect the LLM
-- **Nudge system**: Two types of nudges — redirect (if no security scanners invoked) and progress (if stuck after scanning); max 2 nudges per scan (`MAX_NUDGES`)
-- **Tool activity tracking**: Monitors `TOOL_EXECUTION_START` and `TOOL_EXECUTION_COMPLETE` events; tracks whether the `skill` tool or known scanner commands (bandit, graudit, etc.) have been invoked via `SCANNING_TOOL_NAMES`
-- **Partial results on timeout**: If the scan times out but an assistant message was captured, returns `status: "timeout"` with the partial result instead of just an error
-- **Progress tracker integration**: Tracks file reads via the `view` tool and updates the global `ProgressTracker`
+- `scan()` delegates to the shared `run_session_to_completion()` from `session_runner.py` for all activity-based waiting, nudge, and tool-health logic
+- `scan()` provides scan-specific behaviour via `on_tool_start` and `on_tool_complete` callback hooks (scanner invocation tracking, progress tracking for file reads)
+- Context-aware nudge messages via callable nudge: redirect nudge (if no security scanners invoked) vs progress nudge (if stuck after scanning)
+- **SDK-native skill loading**: Passes `skill_directories` from `get_skill_directories()` to `SessionConfig`
+- **Explicit system_message mode**: Uses `mode: "append"` to preserve SDK built-in guardrails
+- **Connectivity check**: Calls `client.ping()` after `client.start()` for early error detection
+- **Event handler cleanup**: Captures and calls unsubscribe function from `session.on()`
+- **Configurable model**: Uses `self.config.model` instead of hardcoded `"gpt-5"`
+- **Partial results on timeout**: If the scan times out but an assistant message was captured, returns `status: "timeout"` with the partial result
 
 **Key constants** (defined at module level in `agent.py`):
 | Constant | Value | Purpose |
 |----------|-------|---------|
-| `DEFAULT_SCAN_TIMEOUT_SECONDS` | `300.0` | Maximum wall-clock time for a scan |
-| `STALL_DETECTION_SECONDS` | `30.0` | Inactivity threshold before sending a nudge |
+| `DEFAULT_SCAN_TIMEOUT_SECONDS` | `1800.0` | Safety ceiling for a scan (activity-based detection handles normal case) |
+| `INACTIVITY_TIMEOUT_SECONDS` | `120.0` | Seconds of no SDK events before sending a nudge |
+| `MAX_CONSECUTIVE_IDLE_NUDGES` | `3` | Consecutive unresponsive nudges before aborting |
 | `SCANNING_TOOL_NAMES` | `{"skill"}` | Tool names that count as security scanning activity |
-| `MAX_NUDGES` | `2` | Maximum nudge messages per scan |
 
 ---
 
@@ -749,7 +752,9 @@ print(prompt)  # Should include "./my-project"
    - Issues found counter
    - Periodic heartbeat events (every 3 seconds)
 
-4. Added `core/tests/test_progress.py` with unit tests for progress tracking
+4. **Concurrency-safe global tracker**: Uses `contextvars.ContextVar` instead of a plain global variable, enabling safe concurrent usage in multi-scan scenarios (e.g., the Desktop app running multiple scans)
+
+5. Added `core/tests/test_progress.py` with unit tests for progress tracking
 
 **Progress Display Example**:
 ```

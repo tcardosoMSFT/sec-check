@@ -91,25 +91,12 @@ Use bash ONLY for these safe operations:
 - ✅ `cat <file>` — Read file contents
 - ✅ `head`, `tail` — Read portions of files
 - ✅ `which <tool>` / `<tool> --version` — Check tool availability
-- ✅ `bandit` — Run Python security scanner directly
-- ✅ `graudit` — Run pattern-based scanner directly
-- ✅ `guarddog` — Run supply chain scanner directly
-- ✅ `shellcheck` — Run shell script analyzer directly
-- ✅ `trivy` — Run container/filesystem scanner directly
-- ✅ `checkov` — Run IaC scanner directly
-- ✅ `eslint` — Run JS/TS security scanner directly
-- ✅ `dependency-check` — Run dependency CVE scanner directly
+- ✅ Any security scanner CLI that is listed in the **Dynamically Discovered Skills** section (e.g. bandit, graudit, trivy, etc.)
 
 ### 2. `skill` — Invoke Copilot CLI agentic skills
-Use this to invoke the pre-configured security scanning skills:
-- **bandit-security-scan** — Python AST security analysis (for .py files)
-- **graudit-security-scan** — Pattern-based source code auditing (multi-language)
-- **guarddog-security-scan** — Supply chain / malicious package detection
-- **shellcheck-security-scan** — Shell script security analysis (.sh files)
-- **trivy-security-scan** — Container, filesystem, and IaC scanning
-- **checkov-security-scan** — Infrastructure as Code security scanning
-- **eslint-security-scan** — JavaScript/TypeScript security analysis
-- **dependency-check-security-scan** — Dependency CVE scanning
+Use this to invoke security scanning skills that are installed on the system.
+The available skills are listed in the **Dynamically Discovered Skills** section
+appended to these instructions at scan time.  Only invoke skills from that list.
 
 ### 3. `view` — Read file contents
 Use this to read and inspect source code files for manual analysis.
@@ -124,12 +111,10 @@ Follow these steps for a thorough security scan:
 Use `bash` with `find` to list all files in the target folder.
 
 ### Step 2: Run Security Scanners
-Use the `skill` tool and/or `bash` to invoke appropriate scanners:
-- For Python files: invoke `bandit-security-scan` and `graudit-security-scan`
-- For JS/TS files: invoke `eslint-security-scan` and `graudit-security-scan`
-- For shell scripts: invoke `shellcheck-security-scan`
-- For all projects: invoke `graudit-security-scan` with secrets and exec databases
-- For dependencies: invoke `guarddog-security-scan` or `dependency-check-security-scan`
+Use the `skill` tool to invoke the scanners listed in the **Dynamically
+Discovered Skills** section below.  Choose scanners appropriate for the
+file types found in Step 1.  You can also run scanner CLIs directly via
+`bash` if the skill tool is unavailable.
 
 ### Step 3: Manual Inspection
 Use `view` to read suspicious files identified by scanners for deeper analysis.
@@ -248,12 +233,26 @@ class AgentSecConfig:
     # The initial prompt template for scan requests
     initial_prompt: str = field(default=DEFAULT_INITIAL_PROMPT)
 
+    # ── Session-level SDK configuration ──────────────────────────────
+    # These fields allow customising the Copilot SDK session via the
+    # YAML config file or CLI flags, giving users control over model
+    # selection and streaming behaviour without editing code.
+    model: str = field(default="gpt-5")
+
+    # ── LLM deep analysis ────────────────────────────────────────────
+    # When True, the parallel orchestrator runs a semantic LLM analysis
+    # phase after all deterministic tool sub-agents complete.  This
+    # agent reads source files and cross-references tool findings to
+    # detect malicious patterns that pure pattern-matching tools miss.
+    enable_llm_analysis: bool = field(default=True)
+
     # ── Source tracking ──────────────────────────────────────────────
     # These fields record WHERE each value came from so the CLI can
     # print provenance information (e.g. "built-in default" vs.
     # "config file: agentsec.yaml" vs. "CLI flag: --system-message").
     system_message_source: str = field(default=SOURCE_BUILTIN)
     initial_prompt_source: str = field(default=SOURCE_BUILTIN)
+    model_source: str = field(default=SOURCE_BUILTIN)
     
     @classmethod
     def load(
@@ -336,12 +335,26 @@ class AgentSecConfig:
             "initial_prompt",
             config_label,
         )
+
+        # Parse optional session-level settings
+        model = raw_config.get("model", "gpt-5")
+        model_source = (
+            f"{SOURCE_CONFIG_FILE}: {config_label}"
+            if "model" in raw_config
+            else SOURCE_BUILTIN
+        )
+
+        # Parse LLM deep analysis toggle
+        enable_llm_analysis = raw_config.get("enable_llm_analysis", True)
         
         return cls(
             system_message=system_message,
             initial_prompt=initial_prompt,
+            model=model,
+            enable_llm_analysis=enable_llm_analysis,
             system_message_source=sm_source,
             initial_prompt_source=ip_source,
+            model_source=model_source,
         )
     
     @classmethod
@@ -481,18 +494,23 @@ class AgentSecConfig:
         system_message_file: Optional[str] = None,
         initial_prompt: Optional[str] = None,
         initial_prompt_file: Optional[str] = None,
+        model: Optional[str] = None,
+        enable_llm_analysis: Optional[bool] = None,
     ) -> "AgentSecConfig":
         """
         Create a new config with CLI overrides applied.
         
         This method creates a copy of this config with any provided
         overrides applied. Direct text values take priority over files.
+        All fields not overridden are carried forward from the current
+        config (including model, model_source, etc.).
         
         Args:
             system_message: Override system message text.
             system_message_file: Override system message from file.
             initial_prompt: Override initial prompt text.
             initial_prompt_file: Override initial prompt from file.
+            model: Override model name (e.g. "claude-sonnet-4.5").
         
         Returns:
             A new AgentSecConfig with overrides applied.
@@ -503,11 +521,15 @@ class AgentSecConfig:
             ...     system_message="Custom AI instructions..."
             ... )
         """
-        # Start with current values and sources
+        # Start with current values and sources — carry forward ALL
+        # fields so nothing is silently dropped (F1 fix).
         new_system_message = self.system_message
         new_initial_prompt = self.initial_prompt
+        new_model = self.model
+        new_enable_llm_analysis = self.enable_llm_analysis
         new_sm_source = self.system_message_source
         new_ip_source = self.initial_prompt_source
+        new_model_source = self.model_source
         
         # Apply system_message override (text has priority over file)
         if system_message is not None:
@@ -531,11 +553,23 @@ class AgentSecConfig:
             )
             new_ip_source = f"{SOURCE_CLI_FILE_FLAG}: --prompt-file {initial_prompt_file}"
         
+        # Apply model override (F2)
+        if model is not None:
+            new_model = model
+            new_model_source = f"{SOURCE_CLI_FLAG}: --model"
+        
+        # Apply LLM analysis override
+        if enable_llm_analysis is not None:
+            new_enable_llm_analysis = enable_llm_analysis
+        
         return AgentSecConfig(
             system_message=new_system_message,
             initial_prompt=new_initial_prompt,
+            model=new_model,
+            enable_llm_analysis=new_enable_llm_analysis,
             system_message_source=new_sm_source,
             initial_prompt_source=new_ip_source,
+            model_source=new_model_source,
         )
     
     @staticmethod

@@ -26,6 +26,7 @@ Usage:
     tracker.finish_scan()
 """
 
+import contextvars
 import time
 import threading
 from dataclasses import dataclass, field
@@ -61,6 +62,15 @@ class ProgressEventType(Enum):
     SUB_AGENT_FINISHED = "sub_agent_finished"
     SYNTHESIS_STARTED = "synthesis_started"
     SYNTHESIS_FINISHED = "synthesis_finished"
+
+    # LLM deep analysis events (Phase 3 — runs after deterministic tools)
+    LLM_ANALYSIS_STARTED = "llm_analysis_started"
+    LLM_ANALYSIS_FINISHED = "llm_analysis_finished"
+
+    # Tool health monitoring events
+    TOOL_STUCK = "tool_stuck"
+    TOOL_ERROR_DETECTED = "tool_error_detected"
+    TOOL_RETRY_LOOP = "tool_retry_loop"
 
     # Error or warning during scan
     WARNING = "warning"
@@ -473,6 +483,52 @@ class ProgressTracker:
             elapsed_seconds=self._get_elapsed(),
         ))
 
+    def start_llm_analysis(self) -> None:
+        """
+        Mark the start of the LLM deep analysis phase.
+
+        Called by the orchestrator after all deterministic sub-agent
+        scanners have finished.  The LLM analysis agent reads source
+        files and cross-references deterministic findings to detect
+        semantic threats that pattern-matching tools miss.
+        """
+        self._emit(ProgressEvent(
+            type=ProgressEventType.LLM_ANALYSIS_STARTED,
+            message="Running LLM deep analysis (semantic threat review)…",
+            elapsed_seconds=self._get_elapsed(),
+        ))
+
+    def finish_llm_analysis(
+        self,
+        status: str = "success",
+        findings_count: int = 0,
+        elapsed_seconds: float = 0.0,
+    ) -> None:
+        """
+        Mark the completion of the LLM deep analysis phase.
+
+        Args:
+            status:          "success", "error", or "timeout".
+            findings_count:  Number of findings reported.
+            elapsed_seconds: Wall-clock time the analysis ran.
+        """
+        if status == "success" and findings_count == 0:
+            status_label = "clean"
+        elif status == "success":
+            status_label = f"{findings_count} findings"
+        else:
+            status_label = status
+
+        self._emit(ProgressEvent(
+            type=ProgressEventType.LLM_ANALYSIS_FINISHED,
+            message=(
+                f"LLM deep analysis: {status_label} "
+                f"({elapsed_seconds:.0f}s)"
+            ),
+            issues_found=findings_count,
+            elapsed_seconds=self._get_elapsed(),
+        ))
+
     def start_synthesis(self, scanner_count: int) -> None:
         """
         Mark the start of the synthesis phase.
@@ -612,30 +668,40 @@ class ProgressTracker:
             }
 
 
-# Global tracker instance that can be used across modules
-# This allows skills to report progress without needing explicit references
-_global_tracker: Optional[ProgressTracker] = None
+# Context-scoped tracker using contextvars for safe concurrent usage.
+# contextvars.ContextVar is inherited by child async tasks and is safe
+# when multiple scans run concurrently in the same process (e.g., the
+# Desktop app running multiple scans). Unlike a plain global variable,
+# each asyncio task tree gets its own tracker instance.
+_global_tracker_var: contextvars.ContextVar[Optional[ProgressTracker]] = (
+    contextvars.ContextVar("_global_tracker_var", default=None)
+)
 
 
 def get_global_tracker() -> Optional[ProgressTracker]:
     """
-    Get the global progress tracker instance.
+    Get the progress tracker for the current async context.
+
+    Uses contextvars.ContextVar so each asyncio task tree can have
+    its own tracker. This is safe for concurrent scans in the same
+    process (e.g., multiple scans in the Desktop app).
 
     Returns:
-        The global ProgressTracker, or None if not set
+        The ProgressTracker for this context, or None if not set.
     """
-    return _global_tracker
+    return _global_tracker_var.get()
 
 
 def set_global_tracker(tracker: Optional[ProgressTracker]) -> None:
     """
-    Set the global progress tracker instance.
+    Set the progress tracker for the current async context.
 
-    This allows skills to access the tracker without explicit references.
+    Uses contextvars.ContextVar so each asyncio task tree can have
+    its own tracker without interfering with other concurrent scans.
+
     Call this before starting a scan if you want progress updates.
 
     Args:
-        tracker: The ProgressTracker to use globally, or None to clear
+        tracker: The ProgressTracker to use, or None to clear.
     """
-    global _global_tracker
-    _global_tracker = tracker
+    _global_tracker_var.set(tracker)

@@ -10,10 +10,14 @@ agentsec/
 ├── core/                  # Shared agent + skills (Python)
 │   └── agentsec/
 │       ├── agent.py      # SecurityScannerAgent class
-│       ├── config.py     # AgentSecConfig for customization
+│       ├── config.py     # AgentSecConfig for customization (incl. model selection)
 │       ├── orchestrator.py # ParallelScanOrchestrator for concurrent scanning
-│       ├── progress.py   # ProgressTracker for real-time feedback
-│       └── skills.py     # @tool decorated skill functions
+│       ├── progress.py   # ProgressTracker (uses contextvars.ContextVar)
+│       ├── session_runner.py # Shared session-wait logic (run_session_to_completion)
+│       ├── session_logger.py # Per-session file logging
+│       ├── skill_discovery.py # SCANNER_REGISTRY (single source of truth), classify_files(), dynamic skill discovery
+│       ├── tool_health.py # Tool health monitoring, stuck detection, error patterns
+│       └── skills.py     # @tool decorated skill functions (LEGACY — see note)
 ├── cli/                  # Command-line interface (Python)
 │   └── agentsec_cli/
 │       └── main.py       # argparse CLI entry point
@@ -22,6 +26,8 @@ agentsec/
     │   └── server.py     # HTTP endpoint hosting agent
     └── frontend/         # Next.js UI (TypeScript)
 ```
+
+> **Note on skills.py**: The `@tool` skill functions (`list_files`, `analyze_file`, `generate_report`) are **legacy MVP code**. The agent now uses Copilot CLI built-in tools (`bash`, `skill`, `view`) as its primary scanning mechanism. These functions are not registered with any SDK session.
 
 **Communication Flow**:
 - **CLI**: `main.py` → imports `SecurityScannerAgent` from core → direct agent invocation
@@ -165,6 +171,9 @@ initial_prompt: |
 
 # Or load from external file
 # initial_prompt_file: ./prompts/scan.txt
+
+# Set the LLM model (default: gpt-5)
+# model: claude-sonnet-4.5
 ```
 
 **Via CLI**:
@@ -282,6 +291,11 @@ set_global_tracker(None)
 | `FILE_FINISHED` | File analysis complete | `current_file`, `issues_found` |
 | `HEARTBEAT` | Periodic alive signal | `elapsed_seconds`, `percent_complete` |
 | `SCAN_FINISHED` | Scan complete | `files_scanned`, `issues_found`, `elapsed_seconds` |
+| `PARALLEL_PLAN_READY` | Parallel scan plan created | `message` |
+| `SUB_AGENT_STARTED` | Sub-agent scanner started | `current_file` (scanner name) |
+| `SUB_AGENT_FINISHED` | Sub-agent scanner finished | `issues_found`, `elapsed_seconds` |
+| `SYNTHESIS_STARTED` | Synthesis phase begun | `message` |
+| `SYNTHESIS_FINISHED` | Synthesis phase complete | `message` |
 | `WARNING` | Non-fatal issue | `message` |
 | `ERROR` | Serious problem | `message` |
 
@@ -466,11 +480,15 @@ All Python code uses `.vscode/python-copilot-sdk.instructions.md` for detailed a
 | `.vscode/python-copilot-sdk.instructions.md` | Python patterns + AgentSec best practices |
 | `spec/plan-agentSec.md` | Architecture & implementation roadmap |
 | `agentsec.example.yaml` | Example configuration file with documentation |
-| `core/agentsec/agent.py` | SecurityScannerAgent entry point (stall detection, nudge system) |
-| `core/agentsec/config.py` | AgentSecConfig + directive system message + safety guardrails |
-| `core/agentsec/orchestrator.py` | ParallelScanOrchestrator for concurrent sub-agent scanning |
-| `core/agentsec/progress.py` | ProgressTracker for real-time scan feedback |
-| `core/agentsec/skills.py` | @tool skill definitions |
+| `core/agentsec/agent.py` | SecurityScannerAgent — per-scan session factory, dynamic system messages, skip guidance |
+| `core/agentsec/config.py` | AgentSecConfig + system message template (scanner list generated dynamically at runtime) |
+| `core/agentsec/orchestrator.py` | ParallelScanOrchestrator — 3-phase concurrent sub-agent scanning |
+| `core/agentsec/session_runner.py` | Shared `run_session_to_completion()` + `run_session_with_retries()` — activity-based waiting, nudges, tool health, transient-error retry with session factory |
+| `core/agentsec/session_logger.py` | Per-session file logging for debugging |
+| `core/agentsec/skill_discovery.py` | `SCANNER_REGISTRY` (single source of truth), `classify_files()`, `is_scanner_relevant()`, `get_skill_directories()`, dynamic skill discovery |
+| `core/agentsec/tool_health.py` | Tool health monitoring, stuck detection, retry loop detection, error pattern matching |
+| `core/agentsec/progress.py` | ProgressTracker (uses `contextvars.ContextVar` for concurrency safety) |
+| `core/agentsec/skills.py` | Legacy @tool skill definitions (not registered with sessions) |
 | `cli/agentsec_cli/main.py` | CLI command routing with config options |
 | `desktop/backend/server.py` | FastAPI + agent exposure |
 | `desktop/frontend/pages/index.tsx` | Next.js UI entry point |
@@ -506,7 +524,7 @@ A: Uses Copilot CLI built-in tools (`bash`, `skill`, `view`) — `bash` for file
 A: Use `AgentSecConfig` from `core/agentsec/config.py` to set custom system message or prompt
 
 **Q: What happens if the agent gets stuck?**  
-A: Stall detection monitors tool activity every 5s. If no tool activity for 30s, a nudge message is sent (max 2 per scan). After 300s total timeout, partial results are returned.
+A: The shared `run_session_to_completion()` in `session_runner.py` uses activity-based detection. If no SDK events arrive for 120s, a context-aware nudge is sent (built dynamically from discovered skills). After 3 consecutive unresponsive nudges, the session is aborted. A 1800s safety ceiling prevents runaway scans. Partial results are always returned. Transient errors (rate limits, 5xx) are automatically retried with exponential backoff via `run_session_with_retries()`, which uses a session factory to create fresh sessions for each retry attempt.
 
 **Q: How do I configure the agent via command line?**  
 A: Use CLI options: `--config`, `--system-message`, `--system-message-file`, `--prompt`, `--prompt-file`
@@ -515,10 +533,10 @@ A: Use CLI options: `--config`, `--system-message`, `--system-message-file`, `--
 A: Use `agentsec scan <folder> --parallel`. Control concurrency with `--max-concurrent N` (default 3). Programmatically, call `agent.scan_parallel(folder, max_concurrent=3)`.
 
 **Q: How does parallel scanning work?**  
-A: `ParallelScanOrchestrator` in `core/agentsec/orchestrator.py` runs a 3-phase workflow: (1) Discovery — classify files and pick relevant scanners, (2) Parallel Scan — one concurrent SDK session per scanner via `asyncio.gather` + Semaphore, (3) Synthesis — one SDK session compiles a deduplicated report.
+A: `ParallelScanOrchestrator` in `core/agentsec/orchestrator.py` runs a 3-phase workflow: (1) Discovery — `classify_files()` + `is_scanner_relevant()` from `skill_discovery.py` classify files and pick relevant scanners, (2) Parallel Scan — one concurrent SDK session per scanner via `asyncio.gather` + Semaphore, each using a session factory for transient-error retry, (3) Synthesis — uses `session.send_and_wait()` to compile a deduplicated report.
 
 **Q: How do I add a new scanning capability?**  
-A: Create async `@tool` function in `core/agentsec/skills.py`
+A: Add a Copilot CLI agentic skill to `~/.copilot/skills/` or `.copilot/skills/`. The skill will be auto-discovered by `skill_discovery.py` and passed to the SDK via `skill_directories`. It will also appear in the dynamic system message and nudge text automatically. For registering a new scanner in the relevance mapping (so the orchestrator knows which file types it handles), add one entry to `SCANNER_REGISTRY` in `skill_discovery.py` — all derived data (`SKILL_TO_TOOL_MAP`, `SCANNER_RELEVANCE`, `KNOWN_SCANNER_COMMANDS`, `classify_files`, `is_scanner_relevant`) updates automatically.
 
 **Q: How do users run the agent?**  
 A: Two paths: `agentsec scan <folder>` (CLI) or Desktop GUI (Electron)
