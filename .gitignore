@@ -1,15 +1,39 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+
 # Python
 venv/
+.venv
+ENV/
+env/
 __pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-dist/
+*.py[cod]
+*.class
+*.so
+.Python
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 .pytest_cache/
-
-# Environment
-.env
 
 # Node / Frontend
 node_modules/
@@ -19,9 +43,19 @@ out/
 # Electron
 release/
 
-# OS
-.DS_Store
-Thumbs.db
+# IDE
+.idea/
+*.swp
+*.swo
+*~
 
-# Runtime
+# Environment
+.env
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+.temp/
 /tmp/agentsec-port.txt

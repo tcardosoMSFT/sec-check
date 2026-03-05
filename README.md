@@ -1,84 +1,124 @@
-# AgentSec
+# Sec-Check
 
-AI-powered security scanner for your code, built with the GitHub Copilot SDK.
+![sec-check agent](media/sec-check.png)
 
-## Overview
+Scan untrusted code for red flags before you run it—exfiltration, reverse shells, backdoors, and supply-chain traps.
 
-AgentSec is a monorepo containing three packages:
-- **core/** — Shared agent and skills library (Python)
-- **cli/** — Command-line interface (Python)
-- **desktop/** — GUI application with FastAPI backend and Next.js frontend
+Available as a **VS Code Copilot toolkit** (interactive) AND as a **standalone CLI tool** (automated).
 
-## Quick Start
+## What It Does
 
-### Prerequisites
+Sec-Check provides security scanning capabilities to detect dangerous patterns in code—credential theft, reverse shells, backdoors, and supply chain attacks. Use it to review scripts from the internet or untrusted sources before execution.
+
+> :warning: **Warning**: This tool catches common red flags, not sophisticated attacks. Always use manual review and sandboxing for high-risk code.
+
+---
+
+![sec-check](media/sec-check.jpeg)
+
+[View results of a full scan here](audit-results/scan-results.md)
+
+---
+
+## Components
+
+### VS Code Copilot Toolkit
+
+#### Custom Agent
+
+**`@sechek.security-scanner`** — Malicious Code Scanner Agent
+
+Deep security analysis with pattern detection and remediation guidance. Detects:
+- Data exfiltration and credential theft
+- Reverse shells and backdoors
+- Persistence mechanisms (cron, registry)
+- Obfuscated payloads (base64, eval)
+- System destruction patterns
+
+Can operate standalone or use security scanning tools (Bandit, GuardDog, ShellCheck, Graudit) when available.
+
+---
+
+#### Security Skills
+
+Skills teach Copilot how to use specific security tools:
+
+| Skill | Purpose | Use For |
+|-------|---------|---------|
+| **bandit-security-scan** | Python AST-based security analysis | Python code vulnerabilities, dangerous functions (eval, exec, pickle), SQL injection |
+| **checkov-security-scan** | Infrastructure as Code security analysis | Terraform, CloudFormation, Kubernetes manifests, Dockerfiles, cloud misconfigurations, IAM policies |
+| **dependency-check-security-scan** | Software Composition Analysis (SCA) for known CVEs | Java, .NET, JavaScript, Python, Ruby, Go dependencies, NVD/CISA KEV vulnerability detection |
+| **eslint-security-scan** | JavaScript/TypeScript security analysis | JS/TS code vulnerabilities, code injection, XSS, command injection, ReDoS, prototype pollution |
+| **guarddog-security-scan** | Supply chain & malware detection | Dependencies (`requirements.txt`, `package.json`), typosquatting, malicious packages |
+| **shellcheck-security-scan** | Shell script static analysis | Bash/sh scripts, command injection, unquoted variables |
+| **graudit-security-scan** | Multi-language pattern matching | Quick scans on unknown codebases, secrets detection, 15+ languages |
+| **trivy-security-scan** | Container, IaC, CVE & secret scanning | Container images, filesystem dependencies, Kubernetes clusters, IaC misconfigurations, hardcoded secrets, SBOM generation |
+
+---
+
+#### Custom Prompts
+
+| Prompt | When to Use |
+|--------|-------------|
+| **`/sechek.tools-advisor`** | Get recommendations on which tools to run based on your codebase |
+| **`/sechek.tools-scan`** | Execute security tools and save results to `tools-audit.md` |
+| **`/sechek.security-scan`** | Full workspace scan with the security scanner agent |
+| **`/sechek.security-scan-quick`** | Fast scan for malicious patterns, exfiltration, reverse shells |
+| **`/sechek.security-scan-python`** | Python-focused scan using Bandit and GuardDog |
+| **`/sechek.security-scan-iac`** | Infrastructure as Code scan using Checkov for cloud misconfigurations |
+| **`/sechek.security-scan-shell`** | Shell script scan using ShellCheck and Graudit |
+| **`/sechek.security-scan-supply-chain`** | Scan dependencies for supply chain attacks |
+| **`/sechek.security-scan-precommit`** | Pre-commit check for secrets and vulnerabilities |
+| **`/sechek.plan-fix`** | Generate a prioritized remediation plan from scan results |
+| **`/create-security-skill`** | Create a new security scanning skill from tool documentation |
+
+---
+
+#### Security Remediation Planning
+
+After running security scans, use `/sechek.plan-fix` to generate a detailed remediation plan with prioritized tasks, timelines, and fix patterns.
+
+![Security Remediation Planning](media/sec-plan.png)
+
+[View a sample remediation plan here](audit-results/remediation-tasks.md)
+
+The plan includes:
+- **Prioritized tasks** grouped by severity (Critical -> High -> Medium -> Low)
+- **SLA timelines** (24 hours for Critical, 1 week for High, etc.)
+- **Fix patterns** with vulnerable vs. secure code examples
+- **Parallel execution opportunities** to speed up remediation
+- **Verification commands** to confirm fixes
+
+---
+
+### Standalone CLI Tool (AgentSec)
+
+AgentSec is a standalone CLI tool built with the GitHub Copilot SDK that automates security scanning programmatically.
+
+#### Prerequisites
 
 - Python 3.12+ (3.11 minimum)
 - GitHub Copilot subscription
 - GitHub Copilot CLI installed and authenticated
 
-### 1. Activate Environment
+#### Quick Start
 
 ```bash
-# Simple activation (recommended)
-source activate.sh
-
-# Or manual activation
-source venv/bin/activate
-```
-
-### 2. Authenticate Copilot CLI
-
-```bash
-# Check authentication status
-copilot --version
-
-# If needed, authenticate
-copilot auth login
-```
-
-### 3. Run Your First Scan
-
-```bash
-# Scan the test folder
-agentsec scan ./test-scan
-
-# Scan current directory
-agentsec scan .
-
-# Scan any project
-agentsec scan /path/to/your/project
-
-# Use a custom configuration file
-agentsec scan ./src --config ./agentsec.yaml
-
-# Override the system message
-agentsec scan ./src --system-message-file ./custom-prompt.txt
-
-# Run scanners in parallel for faster results
-agentsec scan ./test-scan --parallel
-
-# Parallel mode with up to 5 concurrent scanners
-agentsec scan ./test-scan --parallel --max-concurrent 5
-```
-
-## Setup Details
-
-The virtual environment and packages are **already installed**! If you need to reinstall:
-
-```bash
-# Create fresh virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install packages in editable mode
+# Install packages
 pip install -e ./core
 pip install -e ./cli
+
+# Scan a folder
+agentsec scan ./test-scan
+
+# Scan with parallel mode
+agentsec scan ./test-scan --parallel
+
+# See all options
+agentsec --help
 ```
 
-For detailed setup instructions, troubleshooting, and development workflow, see [SETUP.md](SETUP.md).
-
-## What Gets Scanned
+#### What Gets Scanned
 
 AgentSec uses **Copilot CLI built-in tools** (`bash`, `skill`, `view`) to invoke real security scanners and analyze your code. The agent follows a structured workflow:
 
@@ -94,7 +134,7 @@ AgentSec uses **Copilot CLI built-in tools** (`bash`, `skill`, `view`) to invoke
 3. **Manual Inspection** — Uses `view` to read suspicious files for deeper LLM analysis
 4. **Report Generation** — Compiles all findings into a structured Markdown report with severity levels, line numbers, code snippets, and remediation advice
 
-### Parallel Scanning Mode
+#### Parallel Scanning Mode
 
 By default, AgentSec runs all scanners sequentially in a single LLM session. With `--parallel`, it uses a **sub-agent orchestration** pattern that runs multiple scanners concurrently for faster results:
 
@@ -112,59 +152,31 @@ agentsec scan ./my_project --parallel --max-concurrent 5
 2. **Parallel Scan** — Spawns one sub-agent session per relevant scanner. Each session focuses on exactly one scanner tool. Sessions run concurrently via `asyncio.gather` with a semaphore to cap parallelism
 3. **Synthesis** — Feeds all sub-agent findings into a synthesis session that deduplicates, normalizes severity, and compiles a single consolidated Markdown report
 
-Example parallel progress output:
-```
-📋 Scan plan: running bandit, graudit, trivy (skipped: eslint, shellcheck — no relevant files)
+#### Reliability Features
 
-🔍 Sub-agent started: bandit
-🔍 Sub-agent started: graudit
-🔍 Sub-agent started: trivy
-⚠️  Sub-agent finished: bandit — 3 findings (12s)
-✅ Sub-agent finished: graudit — 0 findings (8s)
-⚠️  Sub-agent finished: trivy — 1 findings (15s)
+- **Activity-based stall detection**: Monitors SDK events continuously; nudges are sent after 120s of inactivity; after 3 unresponsive nudges the session is aborted
+- **Transient error retry**: Rate limits (429), 5xx, and other transient session errors are automatically retried with exponential backoff
+- **Configurable timeout**: Default 1800s safety ceiling; partial results returned on timeout
+- **Safety guardrails**: System message prevents execution of scanned code, blocks dangerous commands, and defends against prompt injection
+- **Dynamic system message**: Available scanner skills are discovered at runtime and injected into the system message
+- **Per-sub-agent isolation** (parallel mode): Each sub-agent runs in its own session; failures in one scanner don't affect others
 
-📝 Synthesising findings from 3 scanners...
-📊 Synthesis complete
-```
-
-### Reliability Features
-
-- **Activity-based stall detection**: The shared `session_runner.py` monitors SDK events continuously; nudges are sent after 120s of inactivity; after 3 unresponsive nudges the session is aborted
-- **Transient error retry**: Rate limits (429), 5xx, and other transient session errors are automatically retried with exponential backoff (5s, 15s, 45s) via `run_session_with_retries()`. Each retry uses a fresh session created by a session factory.
-- **Configurable timeout**: Default 1800s safety ceiling; activity-based detection handles the normal case; partial results returned on timeout
-- **Safety guardrails**: System message (using `mode: "append"` to preserve SDK defaults) prevents execution of scanned code, blocks dangerous commands, and defends against prompt injection
-- **Dynamic system message**: Available scanner skills are discovered at runtime and injected into the system message — no hardcoded scanner lists that can become stale
-- **Per-sub-agent isolation** (parallel mode): Each sub-agent runs in its own session via a session factory; failures in one scanner don't affect others
-- **Connectivity check**: `client.ping()` verifies Copilot CLI server health before scanning
-- **Stale session cleanup**: On initialization, orphaned `agentsec-*` sessions from previous runs are automatically deleted
-- **Proper resource cleanup**: Session factories with `finally`-block cleanup ensure no session leaks; `force_stop()` fallback if `client.stop()` hangs; `sys.exit()` used instead of `os._exit()` for clean shutdown
-- **Context-scoped progress tracking**: Uses `contextvars.ContextVar` for safe concurrent usage in multi-scan scenarios
-- **Consolidated scanner registry**: `SCANNER_REGISTRY` in `skill_discovery.py` is the single source of truth — adding a new scanner requires editing one dict entry
-
-## Progress Tracking
+#### Progress Tracking
 
 AgentSec provides real-time progress feedback during scans:
 
 ```
-⠋ Starting security scan of ./my_project
+Spinning Starting security scan of ./my_project
 
-  📁 Found 15 files to scan
+  folder Found 15 files to scan
 
-  ⠹ [██████████░░░░░░░░░░] 50% Scanning (8/15): app.py
-  ⚠️  Finished app.py: 2 issues found
+  Spinning [progress bar] 50% Scanning (8/15): app.py
+  warning Finished app.py: 2 issues found
 
-✅ Scan complete: 15 files scanned, 5 issues found (23s)
+check Scan complete: 15 files scanned, 5 issues found (23s)
 ```
 
-Features:
-- Visual progress bar with percentage
-- Current file being scanned
-- Files scanned count / total files
-- Elapsed time tracking
-- Issues found counter
-- Periodic heartbeat to show work is ongoing
-
-## Configuration
+#### Configuration
 
 AgentSec can be configured via:
 
@@ -188,99 +200,112 @@ See [agentsec.example.yaml](agentsec.example.yaml) for a full example with comme
 | `--timeout SECONDS` | | Safety ceiling timeout (default 1800) |
 | `--model MODEL` | `-m` | Override LLM model (default gpt-5) |
 
-## Documentation
+---
 
-- **[SETUP.md](SETUP.md)** — Complete setup and testing guide
-- **[.github/copilot-instructions.md](.github/copilot-instructions.md)** — Project architecture and development guide
-- **[spec/plan-agentSec.md](spec/plan-agentSec.md)** — Implementation roadmap and design
-- **[agentsec.example.yaml](agentsec.example.yaml)** — Example configuration file
+## Quick Start
 
-## Architecture
-
-AgentSec uses the GitHub Copilot SDK to create an AI agent that leverages **Copilot CLI built-in tools** for security scanning:
-
-1. **`bash`** — Runs file discovery commands (`find`, `ls`) and invokes security scanner CLIs directly (bandit, graudit, etc.)
-2. **`skill`** — Invokes pre-configured Copilot CLI agentic skills for structured scanning (bandit-security-scan, graudit-security-scan, etc.)
-3. **`view`** — Reads file contents for manual LLM code inspection
-
-The agent also has fallback `@tool` skills (`list_files`, `analyze_file`, `generate_report`) defined in `core/agentsec/skills.py`, but these are **legacy MVP code** that are not registered with any SDK session. Primary scanning uses the Copilot CLI built-in tools.
-
-A **directive system message** (using `mode: "append"` to preserve SDK guardrails) guides the LLM through a structured scanning workflow with safety guardrails. **Activity-based stall detection** in the shared `session_runner.py` module monitors SDK events and sends context-aware nudge messages if the LLM becomes inactive.
-
-The agent is implemented in [core/agentsec/agent.py](core/agentsec/agent.py) and shared by both the CLI and Desktop app.
-
-### Parallel Sub-Agent Architecture
-
-When `--parallel` is used, the `ParallelScanOrchestrator` (in [core/agentsec/orchestrator.py](core/agentsec/orchestrator.py)) manages the workflow:
+### Option A: VS Code Copilot Toolkit
 
 ```
-                ┌──────────────────┐
-                │  Discovery Phase │   Pure Python — classify files,
-                │  (no LLM calls)  │   pick relevant scanners
-                └────────┬─────────┘
-                         │
-            ┌────────────┼────────────┐
-            │            │            │
-       ┌────▼────┐ ┌────▼────┐ ┌────▼────┐
-       │ bandit  │ │ graudit │ │  trivy  │   Concurrent SDK sessions
-       │ session │ │ session │ │ session │   (capped by semaphore)
-       └────┬────┘ └────┬────┘ └────┬────┘
-            │            │            │
-            └────────────┼────────────┘
-                         │
-                ┌────────▼─────────┐
-                │ Synthesis Phase  │   Single SDK session —
-                │ (one LLM call)   │   dedupe & compile report
-                └──────────────────┘
+/sechek.security-scan
+```
+Runs comprehensive analysis using available tools and pattern detection.
+
+**Targeted Scans:**
+```
+/sechek.security-scan-python       # Python code
+/sechek.security-scan-shell        # Shell scripts
+/sechek.security-scan-supply-chain # Dependencies
 ```
 
-Each sub-agent session is isolated: a failure or timeout in one scanner does not affect others. The semaphore (`--max-concurrent`) prevents overloading the Copilot API.
+**Tool Workflow:**
+```
+/sechek.tools-advisor              # Get tool recommendations
+/sechek.tools-scan ./src           # Run recommended tools
+@sechek.security-scanner           # Deep analysis with tool output
+```
 
-## External Security Tools (Skill Discovery)
-
-AgentSec dynamically discovers Copilot CLI agentic skills at runtime instead of maintaining a hardcoded tool list. It scans the same directories the Copilot CLI uses:
-
-| Location | Scope | Path |
-|----------|-------|------|
-| **User-level** | All projects | `~/.copilot/skills/` |
-| **Project-level** | Current project only | `<project>/.copilot/skills/` |
-
-Each skill directory contains a `SKILL.md` file with YAML frontmatter describing the skill's name and purpose. AgentSec maps each skill to its underlying CLI tool and verifies availability on the system.
-
-**Currently discovered skills include:**
-
-| Tool | Description | Status |
-|------|-------------|--------|
-| bandit | Python AST security analysis | ✅ |
-| checkov | IaC misconfiguration scanning | ✅ |
-| dependency-check | CVE detection in dependencies | ✅ |
-| eslint | JavaScript/TypeScript security | ✅ |
-| graudit | Multi-language pattern matching | ✅ |
-| guarddog | Malicious package detection | ✅ |
-| shellcheck | Shell script security analysis | ✅ |
-| trivy | Container & filesystem scanning | ✅ |
-| template-analyzer | ARM/Bicep template scanning | ⬜ |
-
-> **Note**: The list above reflects the current system. Your available tools may differ. The CLI displays the actual discovery results at scan time.
-
-## Development
-
-Since packages are installed in editable mode, changes to the code are immediately available:
+### Option B: Standalone CLI
 
 ```bash
-# Edit skills
-vim core/agentsec/skills.py
+# Install
+pip install -e ./core
+pip install -e ./cli
 
-# Changes are live - no reinstall needed
+# Scan
 agentsec scan ./test-scan
+
+# Parallel mode
+agentsec scan ./test-scan --parallel
 ```
 
-Run tests:
+For detailed setup instructions, see [SETUP.md](SETUP.md).
 
-```bash
-cd core
-pytest tests/
+---
+
+## Output
+
+| File | Generated By | Contents |
+|------|--------------|----------|
+| `.github/.audit/tools-audit.md` | `/sechek.tools-scan` | Raw tool output |
+| `.github/.audit/scan-results.md` | `@sechek.security-scanner` | Analysis with findings & remediation |
+
+---
+
+## Repository Structure
+
 ```
+.github/
++-- copilot-instructions.md          # AI coding guide (comprehensive)
++-- agents/
+|   +-- sechek.malicious-code-scanner.agent.md  # Security scanner agent
+|   +-- implementation.agent.md                 # Dev task agent
+|   +-- orchestrator.agent.md                   # Dev orchestrator agent
+|   +-- context/                                # SDK reference docs
++-- skills/
+|   +-- copilot-sdk/                            # SDK development skill
+|   +-- bandit-security-scan/                   # Python security
+|   +-- checkov-security-scan/                  # IaC security
+|   +-- dependency-check-security-scan/         # SCA / CVE detection
+|   +-- eslint-security-scan/                   # JavaScript/TypeScript
+|   +-- guarddog-security-scan/                 # Supply chain
+|   +-- shellcheck-security-scan/               # Shell scripts
+|   +-- graudit-security-scan/                  # Multi-language
+|   +-- trivy-security-scan/                    # Container & cloud-native
++-- prompts/                                    # Custom prompts
++-- .context/                                   # Attack patterns reference
+core/                                           # SDK agent library (Python)
++-- agentsec/
+|   +-- agent.py, config.py, orchestrator.py
+|   +-- session_runner.py, session_logger.py
+|   +-- skill_discovery.py, tool_health.py
+|   +-- progress.py, skills.py
++-- tests/
+cli/                                            # CLI wrapper (Python)
++-- agentsec_cli/main.py
+spec/                                           # Architecture docs
+research/                                       # Security research notes
+audit-results/                                  # Example scan reports
+test-scan/                                      # Test data
+```
+
+---
+
+## Setup & Development
+
+See [SETUP.md](SETUP.md) for detailed setup instructions, including virtual environment creation, package installation, and development workflow.
+
+For the architecture guide and SDK patterns, see [.github/copilot-instructions.md](.github/copilot-instructions.md).
+
+---
+
+## Limitations
+
+- Pattern-based detection only—may miss obfuscated or novel attacks
+- No guarantee of safety—use as first-pass filter, not final decision
+- Requires manual review for context-dependent vulnerabilities
+
+For production or high-security environments, combine with professional security audits and isolated testing.
 
 ## License
 
