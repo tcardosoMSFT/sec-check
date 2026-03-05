@@ -841,6 +841,16 @@ class ToolHealthMonitor:
         """
         errors: List[ToolErrorInfo] = []
 
+        # ── View tool bypass ─────────────────────────────────────
+        # The "view" tool returns raw file content — not execution
+        # output.  Java files commonly contain imports like
+        # "import java.io.IOException;" which match our error
+        # patterns, causing false positives that abort the session.
+        # Since "view" only reads files and cannot fail in a way
+        # our patterns detect, skip error detection entirely.
+        if tool.tool_name == "view":
+            return []
+
         # ── Exit-code check ──────────────────────────────────────
         # The Copilot CLI wraps tool output with a trailer like
         # "<exited with exit code 0>".  If the tool exited with
