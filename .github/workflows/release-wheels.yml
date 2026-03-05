@@ -33,28 +33,28 @@ jobs:
         run: |
           set -euo pipefail
 
-          VERSION=$(python - <<'PY'
-import tomllib
-from pathlib import Path
+          VERSION=$(python - << 'PY'
+          import tomllib
+          from pathlib import Path
 
-core_pyproject = Path("core/pyproject.toml")
-cli_pyproject = Path("cli/pyproject.toml")
+          core_pyproject = Path("core/pyproject.toml")
+          cli_pyproject = Path("cli/pyproject.toml")
 
-core_data = tomllib.loads(core_pyproject.read_text(encoding="utf-8"))
-cli_data = tomllib.loads(cli_pyproject.read_text(encoding="utf-8"))
+          core_data = tomllib.loads(core_pyproject.read_text(encoding="utf-8"))
+          cli_data = tomllib.loads(cli_pyproject.read_text(encoding="utf-8"))
 
-core_version = core_data["project"]["version"]
-cli_version = cli_data["project"]["version"]
+          core_version = core_data["project"]["version"]
+          cli_version = cli_data["project"]["version"]
 
-if core_version != cli_version:
-    raise SystemExit(
-        f"Version mismatch: core={core_version}, cli={cli_version}. "
-        "Keep both versions identical before releasing."
-    )
+          if core_version != cli_version:
+              raise SystemExit(
+                  f"Version mismatch: core={core_version}, cli={cli_version}. "
+                  "Keep both versions identical before releasing."
+              )
 
-print(core_version)
-PY
-)
+          print(core_version)
+          PY
+          )
 
           TAG="v${VERSION}"
 
