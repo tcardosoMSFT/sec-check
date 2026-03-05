@@ -1,3 +1,23 @@
+[View results of a full scan here](audit-results/scan-results.md)
+
+## Building from Source
+
+To build distributable packages (Wheel files) with Semantic Versioning:
+
+1. Run the build script with your desired version:
+  ```bash
+  python3 scripts/build_release.py 0.2.0
+  ```
+
+2. This will:
+  - Update version numbers in `pyproject.toml` and `__init__.py` files
+  - Build `.whl` packages for `core` and `cli`
+  - Place artifacts in `dist/` folder
+
+3. Install the generated package:
+  ```bash
+  pip install dist/agentsec_cli-0.2.0-py3-none-any.whl
+  ```
 # Sec-Check
 
 ![sec-check agent](media/sec-check.png)
