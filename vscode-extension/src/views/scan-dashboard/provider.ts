@@ -97,8 +97,18 @@ export class ScanDashboardProvider implements vscode.WebviewViewProvider {
   }
 
   private postState(state: ScanState): void {
-    if (this.view?.visible) {
-      this.view.webview.postMessage({ type: "stateUpdate", state });
+    const visible = !!this.view?.visible;
+    if (visible) {
+      this.view!.webview.postMessage({ type: "stateUpdate", state });
+    }
+    // Log only on phase transitions or completion to avoid spamming
+    if (state.phase === "complete" || state.phase === "error") {
+      const out = getOutputChannel();
+      out.info(
+        `[dashboard.postState] phase=${state.phase}, issues=${state.issuesFound}, ` +
+        `scanners=${state.scanners.length}, resultContent=${state.resultContent?.length ?? 0} chars, ` +
+        `reportPath="${state.reportPath || "(none)"}", webviewVisible=${visible}`
+      );
     }
   }
 

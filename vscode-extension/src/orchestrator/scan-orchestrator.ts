@@ -212,8 +212,16 @@ export class ScanOrchestrator {
 
   private handleProgress(msg: ProgressMessage): void {
     if (!this._state) {
+      this.outputChannel.warn(
+        `[handleProgress] event=${msg.event} arrived but _state is null — ignoring`
+      );
       return;
     }
+
+    this.outputChannel.debug(
+      `[handleProgress] event=${msg.event}, files=${msg.filesScanned}/${msg.totalFiles}, ` +
+      `issues=${msg.issuesFound}, pct=${msg.percentComplete}, msg="${msg.message ?? ""}"`
+    );
 
     // Update common fields
     this._state.elapsedSeconds = msg.elapsedSeconds;
@@ -310,11 +318,28 @@ export class ScanOrchestrator {
 
     if (msg.status === "success" && msg.content) {
       this._state.phase = "complete";
+      this.outputChannel.info(
+        `[handleResult] Calling parseFindings on content (${msg.content.length} chars)...`
+      );
       this._findings = parseFindings(msg.content);
 
       this.outputChannel.info(
         `[handleResult] parseFindings returned ${this._findings.length} findings`
       );
+      if (this._findings.length > 0) {
+        for (let i = 0; i < Math.min(5, this._findings.length); i++) {
+          const f = this._findings[i];
+          this.outputChannel.debug(
+            `[handleResult] finding[${i}]: severity=${f.severity}, ` +
+            `file=${f.filePath}:${f.lineNumber}, title="${f.title.slice(0, 80)}", source=${f.source || "(none)"}`
+          );
+        }
+        if (this._findings.length > 5) {
+          this.outputChannel.debug(
+            `[handleResult] ... and ${this._findings.length - 5} more findings`
+          );
+        }
+      }
       if (this._findings.length === 0) {
         this.outputChannel.warn(
           `[handleResult] 0 findings parsed from ${msg.content.length} chars of content — ` +
@@ -330,10 +355,17 @@ export class ScanOrchestrator {
 
       // Push findings to VS Code Problems panel
       const workspaceRoot = this._state.targetFolder;
+      this.outputChannel.info(
+        `[handleResult] Pushing ${this._findings.length} findings to diagnostics (workspaceRoot="${workspaceRoot}")`
+      );
       pushFindings(this._findings, workspaceRoot);
 
+      // Update issuesFound from parsed findings so dashboard shows the real count
+      this._state.issuesFound = this._findings.length;
+
       this.outputChannel.info(
-        `[handleResult] Scan complete: ${this._findings.length} findings pushed to diagnostics`
+        `[handleResult] Scan complete: ${this._findings.length} findings pushed to diagnostics, ` +
+        `state.issuesFound updated to ${this._state.issuesFound}`
       );
     } else if (msg.status === "timeout") {
       this._state.phase = "error";
@@ -379,7 +411,14 @@ export class ScanOrchestrator {
 
   private emitStateChange(): void {
     if (this._state) {
+      this.outputChannel.debug(
+        `[emitStateChange] phase=${this._state.phase}, issues=${this._state.issuesFound}, ` +
+        `scanners=${this._state.scanners.length}, hasOnStateChange=${!!this.onStateChange}, ` +
+        `hasOnScanComplete=${!!this.onScanComplete}`
+      );
       this.onStateChange?.({ ...this._state });
+    } else {
+      this.outputChannel.debug("[emitStateChange] _state is null — nothing to emit");
     }
   }
 }

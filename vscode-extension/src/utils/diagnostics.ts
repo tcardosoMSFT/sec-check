@@ -52,6 +52,11 @@ export function pushFindings(
   findings: Finding[],
   workspaceRoot: string
 ): void {
+  const out = getOutputChannel();
+  out.info(
+    `[pushFindings] Received ${findings.length} findings, workspaceRoot="${workspaceRoot}"`
+  );
+
   const collection = getDiagnosticCollection();
   collection.clear();
 
@@ -92,9 +97,15 @@ export function pushFindings(
   }
 
   // Apply diagnostics per file
+  let totalDiagnostics = 0;
   for (const [uriStr, diagnostics] of byFile) {
     collection.set(vscode.Uri.parse(uriStr), diagnostics);
+    totalDiagnostics += diagnostics.length;
   }
+
+  out.info(
+    `[pushFindings] Pushed ${totalDiagnostics} diagnostics across ${byFile.size} files to Problems panel`
+  );
 }
 
 /**
@@ -129,6 +140,7 @@ export function parseFindings(reportMarkdown: string): Finding[] {
     );
     if (severityMatch) {
       currentSeverity = severityMatch[1].toUpperCase() as FindingSeverity;
+      out.debug(`[parseFindings] L${i + 1}: severity header → ${currentSeverity}`);
       continue;
     }
 
@@ -138,6 +150,7 @@ export function parseFindings(reportMarkdown: string): Finding[] {
     );
     if (inlineSeverityMatch) {
       currentSeverity = inlineSeverityMatch[1].toUpperCase() as FindingSeverity;
+      out.debug(`[parseFindings] L${i + 1}: inline severity → ${currentSeverity}`);
     }
 
     // Look for file:line patterns — multiple formats the LLM might produce:
@@ -155,9 +168,11 @@ export function parseFindings(reportMarkdown: string): Finding[] {
       // Deduplicate same file:line within a severity
       const key = `${currentSeverity}:${filePath}:${lineNumber}`;
       if (seen.has(key)) {
+        out.debug(`[parseFindings] L${i + 1}: duplicate key ${key} — skipping`);
         continue;
       }
       seen.add(key);
+      out.debug(`[parseFindings] L${i + 1}: matched ${filePath}:${lineNumber} (${currentSeverity})`);
 
       // Try to extract the finding title from the same or previous line
       let title = line.replace(fileLineMatch[0], "").trim();

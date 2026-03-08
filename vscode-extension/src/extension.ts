@@ -100,9 +100,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     orchestrator.onScanComplete = (state, findings) => {
       outputChannel.info(
         `[onScanComplete] phase=${state.phase}, findings=${findings.length}, ` +
-        `resultContent length=${state.resultContent?.length ?? 0}`
+        `resultContent length=${state.resultContent?.length ?? 0}, ` +
+        `issuesFound=${state.issuesFound}, reportPath="${state.reportPath || "(none)"}"`
       );
       const workspaceRoot = state.targetFolder;
+      outputChannel.info(
+        `[onScanComplete] Calling resultsProvider.update(${findings.length} findings, "${workspaceRoot}")`
+      );
       resultsProvider.update(findings, workspaceRoot);
 
       if (state.phase === "complete") {
