@@ -1,5 +1,167 @@
 [View results of a full scan here](audit-results/scan-results.md)
 
+---
+
+## Installing from a Release
+
+All release artifacts are attached to each [GitHub Release](https://github.com/alxayo/sec-check/releases). A release contains:
+
+| File | What it is |
+|------|-----------|
+| `agentsec_core-X.Y.Z-py3-none-any.whl` | Core agent library |
+| `agentsec_cli-X.Y.Z-py3-none-any.whl` | CLI entry point (`agentsec` command) |
+| `agentsec-X.Y.Z.vsix` | VS Code extension |
+| `agentsec-copilot-assets-X.Y.Z.zip/.tar.gz` | Copilot skills, agents & prompts |
+
+---
+
+### Option A — VS Code Extension (interactive)
+
+#### Step 1 — Prerequisites
+
+- VS Code 1.95 or later
+- A GitHub Copilot subscription
+
+#### Step 2 — Download the VSIX
+
+Go to the [latest release](https://github.com/alxayo/sec-check/releases/latest) and download `agentsec-X.Y.Z.vsix`.
+
+#### Step 3 — Install the extension
+
+**From the VS Code UI:**
+1. Open the **Extensions** sidebar (`Ctrl+Shift+X` / `Cmd+Shift+X`)
+2. Click the `...` menu (top-right of the sidebar) → **Install from VSIX…**
+3. Select the downloaded `.vsix` file → click **Install**
+4. Reload VS Code when prompted
+
+**Or from the terminal:**
+```bash
+code --install-extension agentsec-0.1.2.vsix
+```
+
+#### Step 4 — Run a security scan
+
+- Open the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
+- Run **AgentSec: Scan Workspace for Security Issues**
+
+Or right-click any folder in the Explorer sidebar → **AgentSec: Scan Folder for Security Issues**.
+
+Results appear in the **AgentSec** panel in the Activity Bar.
+
+---
+
+### Option B — CLI tool (automated / CI)
+
+#### Step 1 — Prerequisites
+
+- Python 3.12+ (3.11 minimum)
+- GitHub Copilot subscription
+- GitHub Copilot CLI installed and authenticated:
+  ```bash
+  # Install Copilot CLI (requires GitHub CLI)
+  gh extension install github/gh-copilot
+  gh auth login
+  ```
+
+#### Step 2 — Download the wheel files
+
+Go to the [latest release](https://github.com/alxayo/sec-check/releases/latest) and download both:
+- `agentsec_core-X.Y.Z-py3-none-any.whl`
+- `agentsec_cli-X.Y.Z-py3-none-any.whl`
+
+#### Step 3 — Create a virtual environment and install
+
+macOS (and modern Linux distros) block installing packages into the system Python to protect system tools. Always install into a virtual environment:
+
+```bash
+# Create a venv (once — pick any location you like)
+python3 -m venv ~/agentsec-venv
+
+# Activate it (run this every new shell session)
+source ~/agentsec-venv/bin/activate
+
+# Install both wheels (core must come first)
+pip install agentsec_core-0.1.2-py3-none-any.whl
+pip install agentsec_cli-0.1.2-py3-none-any.whl
+
+# Verify
+agentsec --version
+```
+
+#### Step 4 — Scan a folder
+
+```bash
+# Basic scan
+agentsec scan ./path/to/code
+
+# Faster parallel scan (runs scanners concurrently)
+agentsec scan ./path/to/code --parallel
+
+# Limit parallel concurrency (default 3)
+agentsec scan ./path/to/code --parallel --max-concurrent 5
+
+# Verbose output (shows SDK events and tool activity)
+agentsec scan ./path/to/code --verbose
+```
+
+The agent produces a Markdown report with severity levels, line numbers, code snippets, and remediation advice. By default the report is printed to stdout; redirect it to a file:
+
+```bash
+agentsec scan ./path/to/code > security-report.md
+```
+
+#### Step 5 (optional) — Custom configuration
+
+Create an `agentsec.yaml` in your project root (see [agentsec.example.yaml](agentsec.example.yaml)):
+
+```yaml
+system_message: |
+  You are a security expert focusing on Python web apps.
+  Prioritise SQL injection and authentication flaws.
+
+initial_prompt: |
+  Scan {folder_path} for HIGH and CRITICAL severity issues only.
+```
+
+Then pass it to the CLI:
+```bash
+agentsec scan ./src --config ./agentsec.yaml
+```
+
+---
+
+### Option C — Copilot Skills & Prompts (Copilot Toolkit)
+
+#### Step 1 — Download the Copilot assets archive
+
+Go to the [latest release](https://github.com/alxayo/sec-check/releases/latest) and download `agentsec-copilot-assets-X.Y.Z.zip`.
+
+#### Step 2 — Extract into your repository
+
+```bash
+cd /path/to/your-repo
+unzip agentsec-copilot-assets-0.1.2.zip
+# This adds .github/skills/, .github/agents/, .github/prompts/ to your repo
+```
+
+#### Step 3 — Use the prompts in Copilot Chat
+
+In VS Code Copilot Chat, type `/` to see available slash commands:
+
+| Slash command | What it does |
+|---------------|-------------|
+| `/sechek.security-scan` | Full workspace security scan |
+| `/sechek.security-scan-quick` | Fast scan for reverse shells, exfiltration, backdoors |
+| `/sechek.security-scan-python` | Python scan (Bandit + GuardDog) |
+| `/sechek.security-scan-shell` | Shell script scan (ShellCheck + Graudit) |
+| `/sechek.security-scan-supply-chain` | Dependency supply-chain scan |
+| `/sechek.security-scan-iac` | IaC scan (Terraform, Kubernetes, Dockerfiles) |
+| `/sechek.plan-fix` | Generate a prioritised remediation plan from scan results |
+
+Or use the **`@sechek.security-scanner`** agent directly in Copilot Chat for interactive deep analysis.
+
+---
+
 ## Building from Source
 
 To build distributable packages (Wheel files) with Semantic Versioning:
@@ -248,7 +410,15 @@ Runs comprehensive analysis using available tools and pattern detection.
 ### Option B: Standalone CLI
 
 ```bash
-# Install
+# Create and activate a virtual environment
+python3 -m venv ~/agentsec-venv
+source ~/agentsec-venv/bin/activate
+
+# Install (from release wheels)
+pip install agentsec_core-0.1.2-py3-none-any.whl
+pip install agentsec_cli-0.1.2-py3-none-any.whl
+
+# Or install from source (editable)
 pip install -e ./core
 pip install -e ./cli
 
@@ -316,6 +486,65 @@ test-scan/                                      # Test data
 See [SETUP.md](SETUP.md) for detailed setup instructions, including virtual environment creation, package installation, and development workflow.
 
 For the architecture guide and SDK patterns, see [.github/copilot-instructions.md](.github/copilot-instructions.md).
+
+---
+
+## Troubleshooting
+
+### `error: externally-managed-environment` when running `pip install`
+
+Python 3.12+ on macOS (and Homebrew-managed Python) blocks `pip install` outside a virtual environment to protect system tools ([PEP 668](https://peps.python.org/pep-0668/)). **Never use `--break-system-packages`** — it risks breaking Homebrew.
+
+**Fix:** Always install into a virtual environment:
+
+```bash
+python3 -m venv ~/agentsec-venv
+source ~/agentsec-venv/bin/activate
+pip install agentsec_core-0.1.2-py3-none-any.whl
+pip install agentsec_cli-0.1.2-py3-none-any.whl
+```
+
+---
+
+### VS Code extension error: `Tool discovery failed: Python at "python3" cannot import agentsec`
+
+The extension spawns `python3` from your `PATH` (the system Python) to import `agentsec`. If you installed `agentsec-core` into a virtual environment, the system `python3` doesn't know about it.
+
+**Fix:** Tell the extension which Python to use by pointing it at the venv's interpreter.
+
+**Step 1 — Verify the venv Python can import agentsec:**
+```bash
+~/agentsec-venv/bin/python -c "import agentsec; print(agentsec.__file__)"
+```
+You should see a file path printed. If you get a `ModuleNotFoundError`, re-run the install step above.
+
+**Step 2 — Set `agentsec.pythonPath` in VS Code:**
+
+Open **Settings** (`Cmd+,`), search for `agentsec.pythonPath`, and set it to the full path of the venv Python:
+```
+/Users/<your-username>/agentsec-venv/bin/python
+```
+
+Or add it directly to `settings.json`:
+```json
+"agentsec.pythonPath": "/Users/<your-username>/agentsec-venv/bin/python"
+```
+
+Reload VS Code after saving the setting.
+
+---
+
+### CLI `agentsec` command not found after install
+
+The `agentsec` command is only available while the virtual environment is **activated**. Either activate it first:
+```bash
+source ~/agentsec-venv/bin/activate
+agentsec --version
+```
+Or use the full path:
+```bash
+~/agentsec-venv/bin/agentsec --version
+```
 
 ---
 
