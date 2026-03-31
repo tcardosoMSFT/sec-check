@@ -247,15 +247,33 @@ The `agentsec-core` wheel also depends on `agent-framework-core==1.0.0b260107` a
 
 Go to the [latest release](https://github.com/alxayo/sec-check/releases/latest) and download `agentsec-copilot-assets-X.Y.Z.zip`.
 
-#### Step 2 — Extract into your repository
+#### Step 2 — Extract the assets archive
 
 ```bash
 cd /path/to/your-repo
 unzip agentsec-copilot-assets-0.1.2.zip
-# This adds .github/skills/, .github/agents/, .github/prompts/ to your repo
 ```
 
-#### Step 3 — Use the prompts in Copilot Chat
+#### Step 3 — Install skills to your user Copilot directory
+
+For AgentSec extension tool discovery, install skill folders under your user-level Copilot skills path:
+
+```bash
+mkdir -p ~/.copilot/skills
+cp -R .github/skills/* ~/.copilot/skills/
+```
+
+On macOS this is typically:
+
+```text
+/Users/<Username>/.copilot/skills
+```
+
+#### Step 4 — Keep agents and prompts in your repository
+
+The release assets still provide project-level Copilot agents and prompts in your repository under `.github/agents/` and `.github/prompts/`.
+
+#### Step 5 — Use the prompts in Copilot Chat
 
 In VS Code Copilot Chat, type `/` to see available slash commands:
 
